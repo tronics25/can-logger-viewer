@@ -1,0 +1,9 @@
+{
+  "assignments": [
+    { "loggerNumber": 1, "canId": { "id": 385, "extended": false } },
+    { "loggerNumber": 2, "canId": { "id": 386, "extended": false } },
+    { "loggerNumber": 3, "canId": { "id": 387, "extended": false } },
+    { "loggerNumber": 4, "canId": { "id": 388, "extended": false } },
+    { "loggerNumber": 5, "canId": { "id": 389, "extended": false } }
+  ]
+}

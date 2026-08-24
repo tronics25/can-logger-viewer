@@ -1,0 +1,224 @@
+{
+  "name": "can-logger-viewer",
+  "displayName": "CAN Logger Viewer",
+  "description": "Vector CANoe/CANalyzer の ASC/BLF ログを開き、要求/応答型ログデータおよび固定フォーマットフレームをデコード・可視化するビューア",
+  "version": "0.1.0",
+  "publisher": "local",
+  "private": true,
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "activationEvents": [
+    "onCustomEditor:canLogger.logViewer",
+    "onView:canLogger.itemSpecs",
+    "onView:canLogger.mappings",
+    "onView:canLogger.fixedFormat",
+    "onView:canLogger.recentLogs"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "canLogger.logViewer",
+        "displayName": "CAN Logger Viewer",
+        "selector": [
+          {
+            "filenamePattern": "*.asc"
+          },
+          {
+            "filenamePattern": "*.blf"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "canLogger",
+          "title": "CAN Logger",
+          "icon": "media/activity-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "canLogger": [
+        {
+          "id": "canLogger.itemSpecs",
+          "name": "Logger項目仕様"
+        },
+        {
+          "id": "canLogger.mappings",
+          "name": "Loggerマッピングプロファイル"
+        },
+        {
+          "id": "canLogger.fixedFormat",
+          "name": "固定フォーマットフレーム"
+        },
+        {
+          "id": "canLogger.recentLogs",
+          "name": "最近開いたログ"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "canLogger.openLog",
+        "title": "ログファイルを開く",
+        "category": "CAN Logger",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "canLogger.newCategory",
+        "title": "分類を追加",
+        "category": "CAN Logger",
+        "icon": "$(add)"
+      },
+      {
+        "command": "canLogger.editItemSpec",
+        "title": "項目を編集",
+        "category": "CAN Logger",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "canLogger.deleteItemSpec",
+        "title": "項目を削除",
+        "category": "CAN Logger",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "canLogger.deleteCategory",
+        "title": "分類を削除",
+        "category": "CAN Logger",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "canLogger.newMappingProfile",
+        "title": "新規マッピングプロファイル",
+        "category": "CAN Logger",
+        "icon": "$(add)"
+      },
+      {
+        "command": "canLogger.openMappingProfile",
+        "title": "マッピングプロファイルを開く",
+        "category": "CAN Logger"
+      },
+      {
+        "command": "canLogger.deleteMappingProfile",
+        "title": "マッピングプロファイルを削除",
+        "category": "CAN Logger",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "canLogger.duplicateMappingProfile",
+        "title": "マッピングプロファイルを複製",
+        "category": "CAN Logger",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "canLogger.openLoggerCanIdSettings",
+        "title": "Logger CAN ID設定",
+        "category": "CAN Logger",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "canLogger.newFixedFormatCanId",
+        "title": "固定フォーマットフレームを追加",
+        "category": "CAN Logger",
+        "icon": "$(add)"
+      },
+      {
+        "command": "canLogger.openFixedFormatCanId",
+        "title": "固定フォーマットフレームを開く",
+        "category": "CAN Logger"
+      },
+      {
+        "command": "canLogger.deleteFixedFormatCanId",
+        "title": "固定フォーマットフレームを削除",
+        "category": "CAN Logger",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "canLogger.refreshViews",
+        "title": "再読込",
+        "category": "CAN Logger",
+        "icon": "$(refresh)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "canLogger.openLog",
+          "when": "view == canLogger.recentLogs",
+          "group": "navigation"
+        },
+        {
+          "command": "canLogger.newCategory",
+          "when": "view == canLogger.itemSpecs",
+          "group": "navigation"
+        },
+        {
+          "command": "canLogger.newMappingProfile",
+          "when": "view == canLogger.mappings",
+          "group": "navigation"
+        },
+        {
+          "command": "canLogger.openLoggerCanIdSettings",
+          "when": "view == canLogger.mappings",
+          "group": "navigation"
+        },
+        {
+          "command": "canLogger.newFixedFormatCanId",
+          "when": "view == canLogger.fixedFormat",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "canLogger.deleteItemSpec",
+          "when": "view == canLogger.itemSpecs && viewItem == canLogger.item",
+          "group": "inline"
+        },
+        {
+          "command": "canLogger.deleteCategory",
+          "when": "view == canLogger.itemSpecs && viewItem == canLogger.category",
+          "group": "inline"
+        },
+        {
+          "command": "canLogger.duplicateMappingProfile",
+          "when": "view == canLogger.mappings && viewItem == canLogger.mappingProfile",
+          "group": "inline"
+        },
+        {
+          "command": "canLogger.deleteMappingProfile",
+          "when": "view == canLogger.mappings && viewItem == canLogger.mappingProfile",
+          "group": "inline"
+        },
+        {
+          "command": "canLogger.deleteFixedFormatCanId",
+          "when": "view == canLogger.fixedFormat && viewItem == canLogger.fixedFormatEntry",
+          "group": "inline"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "check-types": "tsc --noEmit -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.23.0",
+    "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "@vscode/codicons": "^0.0.46-24"
+  }
+}

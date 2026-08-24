@@ -1,0 +1,17 @@
+.vscode/**
+src/**
+design/**
+docs/**
+README_INTERNAL.md
+*.ts
+tsconfig.json
+esbuild.js
+node_modules/**
+!node_modules/.bin/**
+.gitignore
+**/*.map
+**/.eslintrc.json
+# sample/ をワークスペースとして単体で開いてテストした際に誤って作られる
+# ことがある副産物。ルート直下の .canlogger/ (意図した同梱サンプル) だけ
+# パッケージに含める。
+sample/.canlogger/**

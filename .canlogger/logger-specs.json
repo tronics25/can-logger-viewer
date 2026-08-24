@@ -1,0 +1,86 @@
+{
+  "categories": [
+    { "number": 21, "name": "ステアリング系" },
+    { "number": 30, "name": "パワーシート位置" }
+  ],
+  "items": [
+    {
+      "id": "item-steer-speed",
+      "name": "ステアリング角速度",
+      "categoryNumber": 21,
+      "dataNumber": 4,
+      "dataLength": "UINT16",
+      "unit": "rad/s",
+      "offset": -15000,
+      "lsb": 0.1,
+      "max": 2000.0,
+      "min": -2000.0,
+      "endian": "little"
+    },
+    {
+      "id": "item-steer-angle",
+      "name": "ステアリング角度",
+      "categoryNumber": 21,
+      "dataNumber": 5,
+      "dataLength": "UINT16",
+      "unit": "rad",
+      "offset": -18000,
+      "lsb": 0.01,
+      "max": 180.0,
+      "min": -180.0,
+      "endian": "little"
+    },
+    {
+      "id": "item-seat-x",
+      "name": "座席X座標",
+      "categoryNumber": 30,
+      "dataNumber": 1,
+      "dataLength": "UINT16",
+      "unit": "mm",
+      "offset": -30000,
+      "lsb": 1.0,
+      "max": 3000,
+      "min": -3000,
+      "endian": "little"
+    },
+    {
+      "id": "item-seat-y",
+      "name": "座席Y座標",
+      "categoryNumber": 30,
+      "dataNumber": 2,
+      "dataLength": "UINT16",
+      "unit": "mm",
+      "offset": -30000,
+      "lsb": 1.0,
+      "max": 3000,
+      "min": -3000,
+      "endian": "little"
+    },
+    {
+      "id": "item-seat-z",
+      "name": "座席Z座標",
+      "categoryNumber": 30,
+      "dataNumber": 3,
+      "dataLength": "UINT16",
+      "unit": "mm",
+      "offset": -30000,
+      "lsb": 1.0,
+      "max": 3000,
+      "min": -3000,
+      "endian": "little"
+    },
+    {
+      "id": "item-seat-x-precise",
+      "name": "座席X座標(高精度)",
+      "categoryNumber": 30,
+      "dataNumber": 6,
+      "dataLength": "UINT32",
+      "unit": "mm",
+      "offset": -30000,
+      "lsb": 0.001,
+      "max": 3000,
+      "min": -3000,
+      "endian": "little"
+    }
+  ]
+}

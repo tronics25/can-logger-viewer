@@ -1,0 +1,13 @@
+node_modules/
+out/
+media/codicons/
+*.vsix
+.DS_Store
+
+# Wireframeモックアップは要件検討時のサンプル項目名（アーム/先端座標など）が
+# 多数残っており、公開リポジトリには含めない方針。ローカルには残す。
+design/
+
+# 通信仕様・対象機器など固有情報を含む内部ドキュメント。公開リポジトリには含めない。
+README_INTERNAL.md
+docs/
