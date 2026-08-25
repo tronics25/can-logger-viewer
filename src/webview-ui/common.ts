@@ -116,6 +116,8 @@ const BASE_CSS = `
   th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--vscode-panel-border); vertical-align: middle; }
   th { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.02em; color: var(--vscode-descriptionForeground); font-weight: 600; }
   tbody tr:hover:not(.group-row):not(.dupe) td { background: var(--vscode-list-hoverBackground); }
+  /* 編集中(フォーカス中)の行を、ホバーが外れても分かるように色を変える */
+  tbody tr:focus-within:not(.group-row):not(.dupe) td { background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-hoverBackground)); }
   tr.group-row td { background: var(--vscode-sideBar-background); font-weight: 600; }
   tr.dupe td { background: var(--vscode-inputValidation-errorBackground); }
   input[type=text], input[type=number], select {

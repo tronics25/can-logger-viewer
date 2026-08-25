@@ -1,4 +1,5 @@
-// Logger項目のデコード: (raw + offset) * Lsb。
+// Logger項目のデコード: raw * Lsb + offset。
+// オフセットはLsb換算後の値に対して加算する (Lsb換算前のrawに対してではない)。
 // クランプ済み前提 (MAX/MIN一致を検出するのみ、丸めはしない)。
 // 未設定スロット (0xFFFF / 0xFFFFFFFF) は N.C. として扱う。
 import { ClampState, DecodedValue, Endian, LoggerItemSpec, slotCountFor } from '../models/types';
@@ -33,7 +34,7 @@ export function decodeLoggerValue(item: LoggerItemSpec, bytes: Uint8Array): Deco
     return { raw, value: NaN, unit: item.unit, clamp: 'nc' };
   }
 
-  const value = (raw + item.offset) * item.lsb;
+  const value = raw * item.lsb + item.offset;
   let clamp: ClampState = null;
   if (nearlyEquals(value, item.max)) clamp = 'max';
   else if (nearlyEquals(value, item.min)) clamp = 'min';

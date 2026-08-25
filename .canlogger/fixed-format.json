@@ -4,7 +4,7 @@
       "id": "ff-2a0",
       "canId": { "id": 672, "extended": false },
       "name": "車速センサーCAN",
-      "frameLength": 8,
+      "frameLength": 64,
       "signals": [
         {
           "id": "sig-speed",
@@ -26,6 +26,17 @@
           "lengthBits": 16,
           "lsb": 0.01,
           "offset": 0,
+          "byteOrder": "little"
+        },
+        {
+          "id": "sig-temp",
+          "name": "モーター温度",
+          "unit": "℃",
+          "byteOffset": 40,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "lsb": 0.1,
+          "offset": -40,
           "byteOrder": "little"
         }
       ]

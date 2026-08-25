@@ -1,5 +1,6 @@
 // Webview UI: 固定フォーマットフレーム定義 エディタ
 import { formatCanId, parseCanId } from '../decode/canId';
+import { motorolaBitPosition } from '../decode/bits';
 import { FixedFormatCanIdEntry, FixedFormatSignal } from '../models/types';
 import { paletteColor } from './chartUtils';
 import { clear, el, icon, injectBaseStyles, lsbInput, vscodeApi } from './common';
@@ -11,6 +12,17 @@ const FRAME_LENGTHS = [8, 12, 16, 20, 24, 32, 48, 64];
 
 function uid(): string {
   return `sig-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
+/**
+ * バイト境界に沿っている(bitOffset=0かつlengthBitsが8の倍数=バイト単位で
+ * ぴったり収まる)フィールドはLittle(Intel、通常のセンサー値等)、
+ * バイト境界をまたぐ・ビット単位で詰め込む変則的なフィールドはBig
+ * (Motorola、対象システムの信号定義書の書き方に合わせる)をデフォルトとする。
+ */
+function defaultByteOrderFor(bitOffset: number, lengthBits: number): 'little' | 'big' {
+  const byteAligned = bitOffset === 0 && lengthBits % 8 === 0;
+  return byteAligned ? 'little' : 'big';
 }
 
 function save(): void {
@@ -54,6 +66,7 @@ function render(): void {
   lenSelect.addEventListener('change', () => {
     if (entry) entry.frameLength = parseInt(lenSelect.value, 10);
     save();
+    render(); // バイトグリッドの行数・オーバーフロー警告が変わるため再描画する
   });
 
   r.append(
@@ -100,11 +113,21 @@ function buildBitGrid(entry: FixedFormatCanIdEntry): HTMLElement {
   const overlapping = new Set<string>();
 
   for (const signal of entry.signals) {
-    const start = signal.byteOffset * 8 + signal.bitOffset;
     const myIdx = idx.get(signal.id)!;
-    for (let p = start; p < start + signal.lengthBits; p++) {
-      const byteIdx = Math.floor(p / 8);
-      const bitIdx = p % 8;
+    for (let i = 0; i < signal.lengthBits; i++) {
+      // little(Intel)=LSB起点で次バイトのLSB側へ継続、big(Motorola)=MSB起点で
+      // 次バイトのMSB側へ継続。デコード側(extractBits)と同じ位置計算を使う。
+      let byteIdx: number;
+      let bitIdx: number;
+      if (signal.byteOrder === 'big') {
+        const pos = motorolaBitPosition(signal.byteOffset, signal.bitOffset, i);
+        byteIdx = pos.byteIdx;
+        bitIdx = pos.bitIdx;
+      } else {
+        const p = signal.byteOffset * 8 + signal.bitOffset + i;
+        byteIdx = Math.floor(p / 8);
+        bitIdx = p % 8;
+      }
       if (byteIdx < 0 || byteIdx >= frameLength) continue; // フレーム長超過分はテーブル側の警告で扱う
       const existing = cell[byteIdx][bitIdx];
       if (existing === -1) {
@@ -118,15 +141,17 @@ function buildBitGrid(entry: FixedFormatCanIdEntry): HTMLElement {
     }
   }
 
-  // バイトを縦に積み上げず折り返して並べ、各バイトの中に8bitぶんのミニ
-  // ストライプ (bit7が左〜bit0が右) を収める。CAN FDの64バイトでも
-  // 縦に長くなりすぎないようにするため。
+  // バイトを横一列8バイトずつ折り返して並べ、各バイトの中に8bitぶんのミニ
+  // ストライプ (bit7が左〜bit0が右) を収める。実CANフレームの1行=8バイトの
+  // 感覚に合わせて常に8列固定とし、コンテナ幅いっぱいにFillする
+  // (auto-fillだと幅次第で1行の列数が変わってしまうため)。
   const grid = el('div', {
-    style: 'display:grid;grid-template-columns:repeat(auto-fill,minmax(52px,1fr));gap:5px;',
+    style: 'display:grid;grid-template-columns:repeat(8,minmax(56px,1fr));gap:5px;',
   });
   for (let byteIdx = 0; byteIdx < frameLength; byteIdx++) {
     const strip = el('div', { style: 'display:flex;gap:1px;margin-top:3px;' });
     const namesInByte = new Set<string>();
+    const idsInByte = new Set<string>();
     let byteHasOverlap = false;
     for (let b = 7; b >= 0; b--) {
       const sigIdx = cell[byteIdx][b];
@@ -140,16 +165,20 @@ function buildBitGrid(entry: FixedFormatCanIdEntry): HTMLElement {
         const color = paletteColor(sigIdx);
         barStyle += `background:${color}66;border:1px solid ${color};`;
         namesInByte.add(entry.signals[sigIdx]?.name || '(無名信号)');
+        idsInByte.add(entry.signals[sigIdx].id);
       }
       strip.appendChild(el('div', { style: barStyle }));
     }
     const box = el(
       'div',
       {
-        style: `border:1px solid var(--vscode-panel-border);border-radius:4px;padding:4px 5px;${
+        style: `border:1px solid var(--vscode-panel-border);border-radius:4px;padding:4px 5px;transition:box-shadow 0.1s;${
           byteHasOverlap ? 'border-color:var(--vscode-inputValidation-errorBorder,#c0392b);' : ''
         }`,
         title: byteHasOverlap ? '複数の信号が重複' : [...namesInByte].join(', ') || '未使用',
+        // 信号一覧の行をホバー/編集中にした際、対応するバイトをここから
+        // 探して枠を強調する (setByteHighlight参照)。
+        'data-sig-ids': [...idsInByte].join('|'),
       },
       [
         el('div', { class: 'mono', style: 'font-size:9.5px;color:var(--vscode-descriptionForeground);text-align:center' }, [
@@ -163,7 +192,19 @@ function buildBitGrid(entry: FixedFormatCanIdEntry): HTMLElement {
 
   const scrollWrap = el(
     'div',
-    { style: 'max-height:300px;overflow-y:auto;border:1px solid var(--vscode-panel-border);border-radius:4px;padding:8px;max-width:700px' },
+    {
+      // max-widthで上限を切ってしまうと、パネルを広げてもグリッドが追従せず
+      // 固定サイズに見えてしまうため、幅は親要素いっぱい(100%)まで伸びる
+      // ようにする。狭いパネルでは1fr側の下限(minmax 56px)により横スクロール
+      // (overflow-x:auto)にフォールバックする。
+      // 高さも同様に固定のmax-heightで切ると、64バイト(8行)ちょうどの時に
+      // 数px足りずスクロールバーが出てしまっていたため、内側では制限せず
+      // ページ全体のスクロールに委ねる (最大でも8行なので、ページ内で
+      // 許容できる高さに収まる)。
+      style:
+        'overflow-x:auto;border:1px solid var(--vscode-panel-border);' +
+        'border-radius:4px;padding:8px;width:100%;min-width:504px;box-sizing:border-box;',
+    },
     [grid]
   );
 
@@ -195,6 +236,17 @@ function buildBitGrid(entry: FixedFormatCanIdEntry): HTMLElement {
   return wrap;
 }
 
+/** 信号一覧の行をホバー/編集中にした際、バイトグリッド側の該当バイトを強調する。 */
+function setByteHighlight(signalId: string, on: boolean): void {
+  const boxes = document.querySelectorAll<HTMLElement>('[data-sig-ids]');
+  for (let i = 0; i < boxes.length; i++) {
+    const box = boxes[i];
+    if ((box.dataset.sigIds ?? '').split('|').includes(signalId)) {
+      box.style.boxShadow = on ? '0 0 0 2px var(--vscode-focusBorder)' : '';
+    }
+  }
+}
+
 function buildSignalTable(): HTMLElement {
   const table = el('table', {}, [
     el('thead', {}, [
@@ -220,8 +272,26 @@ function buildSignalTable(): HTMLElement {
           max: entry ? entry.frameLength - 1 : undefined,
         }),
       ]),
-      el('td', {}, [numberInput(signal.bitOffset, (v) => (signal.bitOffset = v), { min: 0, max: 7 })]),
-      el('td', {}, [numberInput(signal.lengthBits, (v) => (signal.lengthBits = v), { min: 1, max: 32 })]),
+      el('td', {}, [
+        numberInput(
+          signal.bitOffset,
+          (v) => {
+            signal.bitOffset = v;
+            signal.byteOrder = defaultByteOrderFor(signal.bitOffset, signal.lengthBits);
+          },
+          { min: 0, max: 7 }
+        ),
+      ]),
+      el('td', {}, [
+        numberInput(
+          signal.lengthBits,
+          (v) => {
+            signal.lengthBits = v;
+            signal.byteOrder = defaultByteOrderFor(signal.bitOffset, signal.lengthBits);
+          },
+          { min: 1, max: 32 }
+        ),
+      ]),
       el('td', {}, [
         lsbInput(signal.lsb, (v) => (signal.lsb = v), () => {
           save();
@@ -233,6 +303,11 @@ function buildSignalTable(): HTMLElement {
       el('td', {}, [deleteButton(signal.id)]),
     ]);
     if (overflow) tr.classList.add('dupe');
+    // ホバー中/編集中(フォーカス中)は、上のバイトグリッドで該当バイトを強調する
+    tr.addEventListener('mouseenter', () => setByteHighlight(signal.id, true));
+    tr.addEventListener('mouseleave', () => setByteHighlight(signal.id, false));
+    tr.addEventListener('focusin', () => setByteHighlight(signal.id, true));
+    tr.addEventListener('focusout', () => setByteHighlight(signal.id, false));
     tbody.appendChild(tr);
     if (overflow) {
       tbody.appendChild(
@@ -250,6 +325,7 @@ function textInput(value: string, onChange: (v: string) => void): HTMLInputEleme
   input.addEventListener('change', () => {
     onChange(input.value);
     save();
+    render(); // 信号名はバイトグリッドの凡例・ホバー時のツールチップにも使われるため再描画する
   });
   return input;
 }
@@ -290,6 +366,7 @@ function byteOrderSelect(signal: FixedFormatSignal): HTMLSelectElement {
   select.addEventListener('change', () => {
     signal.byteOrder = select.value as 'little' | 'big';
     save();
+    render(); // バイトグリッド上のこの信号の位置がLittle/Bigで変わるため再描画する
   });
   return select;
 }
@@ -312,16 +389,28 @@ function button(label: string, onClick: () => void, primary = false): HTMLButton
 
 function addSignal(): void {
   if (!entry) return;
+  // 空の場合は先頭(0,0)から。既存項目がある場合は、リスト末尾の項目が
+  // 終わるビット位置から1ビットも空けずに続けて詰める (次のバイト境界まで
+  // 切り上げると、詰め込み型のビットフィールドで無駄な隙間ができてしまう
+  // ため、バイト境界をまたいでいてもビット単位でそのまま続きから始める)。
+  // データ長は最後の項目と同じ値を初期値にする。
+  const last = entry.signals[entry.signals.length - 1];
+  const lastEndBit = last ? last.byteOffset * 8 + last.bitOffset + last.lengthBits : 0;
+  const byteOffset = Math.min(entry.frameLength - 1, Math.floor(lastEndBit / 8));
+  const bitOffset = lastEndBit % 8;
+  const lengthBits = last ? last.lengthBits : 16;
   const signal: FixedFormatSignal = {
     id: uid(),
     name: '新規信号',
     unit: '',
-    byteOffset: 0,
-    bitOffset: 0,
-    lengthBits: 16,
+    byteOffset,
+    bitOffset,
+    lengthBits,
     lsb: 1,
     offset: 0,
-    byteOrder: 'little',
+    // バイト境界に沿っていれば(通常のセンサー値等)Little、沿っていなければ
+    // (ビット詰め込み型の変則的なフィールド)Bigを自動選択する。
+    byteOrder: defaultByteOrderFor(bitOffset, lengthBits),
   };
   entry.signals.push(signal);
   save();

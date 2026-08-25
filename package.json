@@ -2,7 +2,7 @@
   "name": "can-logger-viewer",
   "displayName": "CAN Logger Viewer",
   "description": "Vector CANoe/CANalyzer の ASC/BLF ログを開き、要求/応答型ログデータおよび固定フォーマットフレームをデコード・可視化するビューア",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "local",
   "private": true,
   "engines": {

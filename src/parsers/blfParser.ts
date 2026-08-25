@@ -10,13 +10,22 @@
 //   [FileHeader]
 //   [LogContainer]* (objectType=10, zlib圧縮 or 非圧縮のペイロードを持つ)
 //     -> 展開すると [ObjectHeaderBase+Header][payload] の列 (4バイト境界)
-//        CAN_MESSAGE(1) / CAN_MESSAGE2(86) を CanFrame に変換する
+//        CAN_MESSAGE(1) / CAN_MESSAGE2(86) / CAN_FD_MESSAGE(100) を
+//        CanFrame に変換する
+//
+// CAN_FD_MESSAGE(100)のペイロード構造 ("<HBBLLBBB5x64s" 相当、84バイト固定)
+// は公開実装 (python-can の blf.py) を参考にしたbest-effort実装。
+// CAN_FD_MESSAGE_64(101) はビットタイミング情報を伴う可変長構造で、参照実装
+// 間でも構造の記述に食い違いがあり誤読のリスクが高いため今回は未対応とし、
+// 遭遇した場合はwarningsで件数のみ報告する。
 import * as zlib from 'zlib';
 import { CanFrame, ParseResult } from '../models/types';
 
 const OBJ_TYPE_CAN_MESSAGE = 1;
 const OBJ_TYPE_CAN_MESSAGE2 = 86;
 const OBJ_TYPE_LOG_CONTAINER = 10;
+const OBJ_TYPE_CAN_FD_MESSAGE = 100;
+const OBJ_TYPE_CAN_FD_MESSAGE_64 = 101;
 
 const FLAG_TEN_MICROSECONDS = 0x1;
 const FLAG_NANOSECONDS = 0x2;
@@ -98,6 +107,51 @@ function parseCanMessageObject(
     dir: flags & TX_FLAG ? 'Tx' : 'Rx',
     channel,
     dlc,
+    dlcCode: dlcRaw, // Classic CANのDLC生値 (通常0-8)
+    data,
+  });
+}
+
+// CAN_FD_MESSAGE(100) ペイロードレイアウト ("<HBBLLBBB5x64s", 84バイト固定):
+//   channel(u16) flags(u8) dlc(u8,DLCコード0-15) canId(u32) frameLength(u32,未使用)
+//   bitCount(u8,未使用) fdFlags(u8,未使用) validDataBytes(u8) pad(5) data(64)
+function parseCanFdMessageObject(
+  buf: Buffer,
+  objStart: number,
+  header: ObjectHeader,
+  firstTick: { value: bigint | null },
+  frames: CanFrame[]
+): void {
+  const payloadOffset = objStart + header.headerSize;
+  if (payloadOffset + 84 > buf.length) return;
+
+  const channel = buf.readUInt16LE(payloadOffset);
+  const flags = buf.readUInt8(payloadOffset + 2);
+  const dlcCode = buf.readUInt8(payloadOffset + 3);
+  const idRaw = buf.readUInt32LE(payloadOffset + 4);
+  const validDataBytes = buf.readUInt8(payloadOffset + 14);
+  const dataOffset = payloadOffset + 20;
+
+  const extended = (idRaw & EXTENDED_ID_BIT) !== 0;
+  const canId = idRaw & 0x1fffffff;
+  const dlc = Math.min(validDataBytes, 64);
+  const data = new Uint8Array(dlc);
+  for (let i = 0; i < dlc && dataOffset + i < buf.length; i++) {
+    data[i] = buf.readUInt8(dataOffset + i);
+  }
+
+  if (firstTick.value === null) firstTick.value = header.objectTimeStamp;
+  const elapsedTick = header.objectTimeStamp - firstTick.value;
+  const timestamp = tickToSeconds(elapsedTick, header.objectFlags);
+
+  frames.push({
+    timestamp,
+    canId,
+    extended,
+    dir: flags & TX_FLAG ? 'Tx' : 'Rx',
+    channel,
+    dlc,
+    dlcCode,
     data,
   });
 }
@@ -109,6 +163,7 @@ function parseContainedObjects(
   warnings: string[]
 ): void {
   let offset = 0;
+  let unsupportedFdMessages = 0;
   while (offset + 16 <= buf.length) {
     const header = readObjectHeader(buf, offset);
     if (!header || header.objectSize < 16) {
@@ -117,6 +172,10 @@ function parseContainedObjects(
     try {
       if (header.objectType === OBJ_TYPE_CAN_MESSAGE || header.objectType === OBJ_TYPE_CAN_MESSAGE2) {
         parseCanMessageObject(buf, offset, header, firstTick, frames);
+      } else if (header.objectType === OBJ_TYPE_CAN_FD_MESSAGE) {
+        parseCanFdMessageObject(buf, offset, header, firstTick, frames);
+      } else if (header.objectType === OBJ_TYPE_CAN_FD_MESSAGE_64) {
+        unsupportedFdMessages++;
       }
     } catch {
       warnings.push('一部のCANメッセージオブジェクトの解析に失敗しました（スキップ）');
@@ -125,6 +184,11 @@ function parseContainedObjects(
     const advance = Math.ceil(header.objectSize / 4) * 4;
     if (advance <= 0) break;
     offset += advance;
+  }
+  if (unsupportedFdMessages > 0) {
+    warnings.push(
+      `${unsupportedFdMessages}件のCAN_FD_MESSAGE_64形式のメッセージは未対応のためスキップしました。`
+    );
   }
 }
 

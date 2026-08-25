@@ -7,6 +7,7 @@ import {
   dataNumberRangeLabel,
   loggerItemKeyLabel,
   loggerItemsOverlap,
+  occupiedDataNumbers,
 } from '../models/types';
 import { clear, el, icon, injectBaseStyles, lsbInput, vscodeApi } from './common';
 
@@ -203,10 +204,13 @@ function buildItemRow(item: LoggerItemSpec, isDupe: boolean): HTMLElement {
     value: String(item.dataNumber),
     class: 'mono',
     style: 'width:64px',
+    min: '1',
   }) as HTMLInputElement;
   dataNumberInput.addEventListener('change', () => {
+    // データ番号0は「未設定スロット」を表す予約値のため、項目には割り当てない
     const v = parseInt(dataNumberInput.value, 10);
-    if (!Number.isNaN(v) && v >= 0) item.dataNumber = v;
+    if (!Number.isNaN(v) && v >= 1) item.dataNumber = v;
+    else dataNumberInput.value = String(item.dataNumber);
     save();
   });
 
@@ -269,12 +273,20 @@ function button(label: string, onClick: () => void, primary = false): HTMLButton
   return b;
 }
 
+/** 分類内で次に割り当てるデータ番号。未登録なら1、登録済みなら末尾の次番号。 */
+function nextDataNumber(categoryNumber: number): number {
+  const existing = state.items.filter((i) => i.categoryNumber === categoryNumber);
+  if (existing.length === 0) return 1;
+  const maxOccupied = Math.max(...existing.flatMap((i) => occupiedDataNumbers(i)));
+  return maxOccupied + 1;
+}
+
 function addItem(categoryNumber: number): void {
   const item: LoggerItemSpec = {
     id: uid(),
     name: '新規項目',
     categoryNumber,
-    dataNumber: 0,
+    dataNumber: nextDataNumber(categoryNumber),
     dataLength: 'UINT16',
     unit: '',
     offset: 0,

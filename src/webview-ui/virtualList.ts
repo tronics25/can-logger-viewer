@@ -5,7 +5,13 @@ import { el } from './common';
 
 export interface VirtualColumn {
   label: string;
-  /** CSS gridのトラックサイズ (例: "90px", "1fr", "minmax(100px,1fr)") */
+  /**
+   * 列幅 (px固定値のみ、例: "90px")。
+   * ヘッダーと各行は別々のCSS Grid (translateYで縦位置をずらす仮想スクロール
+   * のため) なので、"1fr"/"minmax(...,1fr)"のような可変トラックを使うと行
+   * ごとに実際の描画幅が変わってしまいヘッダーとズレる。横スクロールに対応
+   * するため列幅は必ずpx固定値にし、全列の合計px幅をテーブル全体の実幅とする。
+   */
   width: string;
 }
 
@@ -32,9 +38,41 @@ export interface VirtualTableHandle {
 const DEFAULT_ROW_HEIGHT = 26;
 const OVERSCAN = 6;
 
+/** セル1つ分のpadding (左右合計)。measureMaxCellWidthの実測にも使う。 */
+const CELL_PADDING_PX = 16;
+const MIN_MEASURED_WIDTH = 80;
+const MAX_MEASURED_WIDTH = 2200;
+
+/**
+ * 候補となるセル内容 (Node/文字列) の中で最も幅を取るものを実際にDOMへ
+ * 一時挿入して計測し、そのpx幅を返す (列幅を実データに合わせて決めるための
+ * ヘルパー。ヘッダーと全行が同じ固定px幅を使うことで、横スクロール時にも
+ * ヘッダーと行がズレないようにする)。
+ */
+export function measureMaxCellWidth(candidates: (Node | string)[], fallback = 120): number {
+  if (candidates.length === 0) return fallback;
+  const probe = el('div', {
+    style: 'position:absolute;visibility:hidden;left:-9999px;top:-9999px;white-space:nowrap;',
+  });
+  document.body.appendChild(probe);
+  let max = 0;
+  for (const c of candidates) {
+    const span = el('span', {
+      style: `display:inline-block;padding:0 ${CELL_PADDING_PX / 2}px;font-size:12.5px;white-space:nowrap;`,
+    });
+    span.append(c);
+    probe.appendChild(span);
+    max = Math.max(max, span.getBoundingClientRect().width);
+    probe.removeChild(span);
+  }
+  document.body.removeChild(probe);
+  return Math.min(MAX_MEASURED_WIDTH, Math.max(MIN_MEASURED_WIDTH, Math.ceil(max) + 4));
+}
+
 export function renderVirtualTable(host: HTMLElement, options: VirtualTableOptions): VirtualTableHandle {
   const rowHeight = options.rowHeight ?? DEFAULT_ROW_HEIGHT;
   const gridColumns = options.columns.map((c) => c.width).join(' ');
+  const totalWidth = options.columns.reduce((sum, c) => sum + (parseInt(c.width, 10) || 0), 0);
   let rowCount = options.rowCount;
 
   host.innerHTML = '';
@@ -43,6 +81,14 @@ export function renderVirtualTable(host: HTMLElement, options: VirtualTableOptio
   host.style.minHeight = '0';
   host.style.border = '1px solid var(--vscode-panel-border)';
   host.style.borderRadius = '4px';
+  // 列の合計幅がホスト幅を超えたら横スクロールできるようにする。ヘッダーと
+  // 行本体(body)の両方を同じtotalWidthに固定することで、横スクロール時も
+  // 常にヘッダーと列が揃った状態で一緒に動く。
+  // overflow-xだけをautoにするとCSSの仕様上overflow-yも暗黙にautoへ昇格し、
+  // body側の縦スクロールと二重になってしまうため、overflow-yは明示的に
+  // hidden指定して縦スクロールはbody側だけに閉じ込める。
+  host.style.overflowX = 'auto';
+  host.style.overflowY = 'hidden';
   if (options.height) host.style.height = options.height;
   else host.style.flex = '1';
 
@@ -52,7 +98,9 @@ export function renderVirtualTable(host: HTMLElement, options: VirtualTableOptio
   }
 
   const header = el('div', {
-    style: `display:grid;grid-template-columns:${gridColumns};flex:0 0 auto;border-bottom:1px solid var(--vscode-panel-border);background:var(--vscode-editor-background);`,
+    style:
+      `display:grid;grid-template-columns:${gridColumns};flex:0 0 auto;width:${totalWidth}px;min-width:${totalWidth}px;` +
+      'border-bottom:1px solid var(--vscode-panel-border);background:var(--vscode-editor-background);',
   });
   for (const col of options.columns) {
     header.appendChild(
@@ -68,7 +116,9 @@ export function renderVirtualTable(host: HTMLElement, options: VirtualTableOptio
     );
   }
 
-  const body = el('div', { style: 'position:relative;flex:1;min-height:0;overflow-y:auto;' });
+  const body = el('div', {
+    style: `position:relative;flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;width:${totalWidth}px;min-width:${totalWidth}px;`,
+  });
   const sizer = el('div', { style: 'position:relative;' });
   const viewport = el('div', { style: 'position:absolute;top:0;left:0;right:0;' });
   sizer.appendChild(viewport);

@@ -15,7 +15,7 @@ import { clear, el, injectBaseStyles, vscodeApi } from './common';
 import { LoggerColumn, LoggerRow, WireFrame, buildLoggerRows, loggerColumnsFor } from './loggerRows';
 import { renderTimeSeriesTab } from './timeSeriesChart';
 import { renderThreeDTab, stopThreeDPlayback } from './threeDChart';
-import { renderVirtualTable } from './virtualList';
+import { measureMaxCellWidth, renderVirtualTable } from './virtualList';
 
 const api = vscodeApi();
 
@@ -64,18 +64,53 @@ function buildContentCell(f: WireFrame): HTMLElement {
     const hex = Array.from(f.data.slice(0, f.dlc))
       .map((b) => b.toString(16).toUpperCase().padStart(2, '0'))
       .join(' ');
-    return el('span', { class: 'mono', style: 'color:var(--vscode-descriptionForeground)' }, [hex || '(0バイト)']);
+    const span = el('span', { class: 'mono', style: 'color:var(--vscode-descriptionForeground)' }, [
+      hex || '(0バイト)',
+    ]);
+    span.title = hex; // 列幅で見切れた場合もホバーで全体を確認できるようにする
+    return span;
   }
   const data = new Uint8Array(f.data);
-  const decoded = decodeFixedFormatFrame(entry.signals, data);
+  const { decoded, skipped } = decodeFixedFormatFrame(entry.signals, data);
   const wrap = el('span', {});
+  const plainParts: string[] = [];
   for (const { signal, decoded: d } of decoded) {
     wrap.appendChild(
       el('span', { class: 'sig-tok' }, [`${signal.name} `, el('b', {}, [formatNumber(d.value)]), ` ${signal.unit}`])
     );
+    plainParts.push(`${signal.name} ${formatNumber(d.value)} ${signal.unit}`);
   }
-  if (decoded.length === 0) wrap.appendChild(el('span', { class: 'sub' }, ['(信号未登録)']));
+  if (decoded.length === 0 && skipped.length === 0) wrap.appendChild(el('span', { class: 'sub' }, ['(信号未登録)']));
+  if (skipped.length > 0) {
+    // 信号定義はあるが、このフレームの実データ長 (f.dlc) が信号の要求バイト
+    // 範囲に届かない (例: 同じCAN IDでClassic CANとCAN FDが混在している場合)
+    const note = `(${skipped.length}件は受信データ長${f.dlc}バイト不足のため非表示)`;
+    wrap.appendChild(el('span', { class: 'sub', style: 'margin:0' }, [note]));
+    plainParts.push(note);
+  }
+  wrap.title = plainParts.join('　'); // 列幅で見切れた場合もホバーで全体を確認できるようにする
   return wrap;
+}
+
+/**
+ * 「生ログ」タブのCONTENT列幅。CAN IDごとに1件だけ代表フレームを実際に
+ * デコード/計測し、その中で最大のものに合わせる (全件を毎回計測すると
+ * フィルタ入力のたびに重くなるため、CAN ID種別数だけで済むようにする)。
+ * frames/fixedFormatが変わるたびにrecomputeRawContentWidth()で更新する。
+ */
+let rawContentColumnWidth = 320;
+
+function recomputeRawContentWidth(): void {
+  const representative = new Map<string, WireFrame>();
+  for (const f of frames) {
+    const key = `${f.canId}:${f.extended}`;
+    const cur = representative.get(key);
+    // 同じCAN IDの中で最もバイト数が多いフレームを代表として使う
+    // (未登録CAN IDの16進ダンプ幅はdlcに比例するため)
+    if (!cur || f.dlc > cur.dlc) representative.set(key, f);
+  }
+  const candidates = Array.from(representative.values()).map((f) => buildContentCell(f));
+  rawContentColumnWidth = measureMaxCellWidth(candidates, 320);
 }
 
 function formatNumber(v: number): string {
@@ -107,7 +142,7 @@ function renderRawTab(container: HTMLElement): void {
   ]);
 
   const legend = el('div', { class: 'sub', style: 'flex:0 0 auto' }, [
-    '信号名 値 単位 = 固定フォーマットフレーム登録済み（パース済み表示）　/　16進バイト列 = 未登録・またはLogger（Loggerタブで確認）',
+    '信号名 値 単位 = 固定フォーマットフレーム登録済み（パース済み表示）　/　16進バイト列 = 未登録・またはLogger（Loggerタブで確認）　/　DLC = ログ上のDLCコード値(16進、Classic CANは実バイト数と同じ)　/　Length = 実データ長(バイト)',
   ]);
 
   clear(container);
@@ -127,7 +162,10 @@ function renderRawTab(container: HTMLElement): void {
       { label: 'Time (s)', width: '90px' },
       { label: 'TX/RX', width: '56px' },
       { label: 'CAN ID', width: '110px' },
-      { label: 'CONTENT', width: 'minmax(300px,1fr)' },
+      { label: 'Ch', width: '48px' },
+      { label: 'DLC', width: '48px' },
+      { label: 'Length', width: '64px' },
+      { label: 'CONTENT', width: `${rawContentColumnWidth}px` },
     ],
     rowCount: filtered.length,
     emptyMessage: '該当するフレームがありません。',
@@ -137,6 +175,9 @@ function renderRawTab(container: HTMLElement): void {
         el('span', { class: 'mono' }, [f.t.toFixed(4)]),
         f.dir,
         el('span', { class: 'mono' }, [formatCanId(canIdRef(f))]),
+        el('span', { class: 'mono' }, [String(f.channel)]),
+        el('span', { class: 'mono' }, [f.dlcCode.toString(16).toUpperCase()]),
+        el('span', { class: 'mono' }, [String(f.dlc)]),
         buildContentCell(f),
       ];
     },
@@ -149,7 +190,7 @@ function exportRawCsv(rows: WireFrame[]): void {
     const entry = findFixedFormatEntry(f);
     let content: string;
     if (entry) {
-      const decoded = decodeFixedFormatFrame(entry.signals, new Uint8Array(f.data));
+      const { decoded } = decodeFixedFormatFrame(entry.signals, new Uint8Array(f.data));
       content = decoded.map(({ signal, decoded: d }) => `${signal.name}=${formatNumber(d.value)}${signal.unit}`).join(' ');
     } else {
       content = Array.from(f.data.slice(0, f.dlc))
@@ -268,7 +309,7 @@ function renderLoggerTable(container: HTMLElement, profile: LoggerMappingProfile
     columns: [
       { label: 'Time (s)', width: '90px' },
       { label: 'Logger', width: '64px' },
-      ...columns.map((c) => ({ label: `${c.item.name} (${c.item.unit})`, width: 'minmax(90px,1fr)' })),
+      ...columns.map((c) => ({ label: `${c.item.name} (${c.item.unit})`, width: '150px' })),
     ],
     rowCount: rows.length,
     emptyMessage: 'このプロファイルで受信したデータがまだありません。',
@@ -372,12 +413,14 @@ window.addEventListener('message', (event) => {
     loggerCanIds = msg.loggerCanIds;
     loggerMappings = msg.loggerMappings;
     selectedProfileId = loggerMappings.profiles[0]?.id ?? null;
+    recomputeRawContentWidth();
     render();
   } else if (msg.type === 'registriesUpdated') {
     fixedFormat = msg.fixedFormat;
     loggerSpecs = msg.loggerSpecs;
     loggerCanIds = msg.loggerCanIds;
     loggerMappings = msg.loggerMappings;
+    recomputeRawContentWidth();
     render();
   }
 });

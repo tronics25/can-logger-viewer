@@ -54,6 +54,7 @@ export class LogViewerEditorProvider implements vscode.CustomReadonlyEditorProvi
           dir: f.dir,
           channel: f.channel,
           dlc: f.dlc,
+          dlcCode: f.dlcCode,
           data: Array.from(f.data),
         })),
         warnings: document.parseResult.warnings,

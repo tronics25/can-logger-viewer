@@ -11,3 +11,8 @@ design/
 # 通信仕様・対象機器など固有情報を含む内部ドキュメント。公開リポジトリには含めない。
 README_INTERNAL.md
 docs/
+
+# sample/ をワークスペースとして単体で開いてテストした際に誤って作られる
+# ことがある副産物 (.vscodeignoreでも除外済み)。ルート直下の .canlogger/
+# (意図した同梱サンプル) とは別物。
+sample/.canlogger/

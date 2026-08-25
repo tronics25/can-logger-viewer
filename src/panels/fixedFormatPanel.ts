@@ -110,7 +110,8 @@ export function createFixedFormatEntry(): void {
         id: `ff-${Date.now().toString(36)}`,
         canId: { id, extended },
         name,
-        frameLength: 8,
+        // 対象システムはCAN FD電文が主体のため、初期値はCAN FD最大長の64バイトとする
+        frameLength: 64,
         signals: [],
       });
       saveFixedFormat(file);

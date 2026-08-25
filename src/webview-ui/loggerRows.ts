@@ -21,6 +21,7 @@ export interface WireFrame {
   dir: 'Rx' | 'Tx';
   channel: number;
   dlc: number;
+  dlcCode: number;
   data: number[];
 }
 

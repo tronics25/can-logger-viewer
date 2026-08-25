@@ -193,6 +193,11 @@ export interface CanFrame {
   channel: number;
   /** 実データ長 (バイト)。CAN FDは最大64。 */
   dlc: number;
+  /**
+   * DLCフィールドの生値。Classic CANはdlcと同じ(0-8)。CAN FDは実バイト数
+   * ではなく0-15のコード値 (9=12byte, ..., f=64byte等) で表示上区別する。
+   */
+  dlcCode: number;
   data: Uint8Array;
 }
 
