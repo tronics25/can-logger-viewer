@@ -12,7 +12,9 @@ design/
 README_INTERNAL.md
 docs/
 
-# sample/ をワークスペースとして単体で開いてテストした際に誤って作られる
-# ことがある副産物 (.vscodeignoreでも除外済み)。ルート直下の .canlogger/
-# (意図した同梱サンプル) とは別物。
-sample/.canlogger/
+# sample/ が「サンプルワークスペース」本体 (.canlogger/ + example.asc/blf)
+# であり、拡張機能プロジェクト自体(このリポジトリのルート)はサンプルでは
+# ないため、ルート直下に .canlogger/ が要る場面はない。もしルートを
+# ワークスペースとして開いて誤って作られてしまった場合の副産物を除外する
+# (先頭の/でルート限定、sample/.canlogger/ とは区別する)。
+/.canlogger/

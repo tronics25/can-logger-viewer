@@ -8,6 +8,7 @@ import {
   FixedFormatFile,
   LoggerCanIdsFile,
   LoggerMappingsFile,
+  LoggerNumber,
   LoggerSpecsFile,
 } from '../models/types';
 
@@ -91,7 +92,15 @@ export function saveLoggerCanIds(data: LoggerCanIdsFile): void {
 }
 
 export function loadLoggerMappings(): LoggerMappingsFile {
-  return loadJson(FILES.loggerMappings, { profiles: [] });
+  const data = loadJson<LoggerMappingsFile>(FILES.loggerMappings, { profiles: [] });
+  // Logger 1〜5だった頃に作られたファイルには"6"キーが存在しないため、
+  // 読み込み時に空スロットで補う (以後保存すれば6も永続化される)。
+  for (const profile of data.profiles) {
+    for (let n = 1; n <= 6; n++) {
+      if (!profile.slots[n as LoggerNumber]) profile.slots[n as LoggerNumber] = [];
+    }
+  }
+  return data;
 }
 export function saveLoggerMappings(data: LoggerMappingsFile): void {
   saveJson(FILES.loggerMappings, data);

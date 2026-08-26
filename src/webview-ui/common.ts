@@ -27,6 +27,15 @@ export function el<K extends keyof HTMLElementTagNameMap>(
 }
 
 export function clear(node: Element): void {
+  // フォーカス中の要素を持ったまま子要素をまとめて破棄すると、ブラウザが
+  // フォーカスの移動先を探す際に暗黙的にスクロールしてしまうことがある
+  // (Windows/ChromiumはmacOSと違い、ボタンをクリックした時点で実際に
+  // フォーカスが移るため顕在化する。例: LSBの▲/▼ボタン連打で毎回render()
+  // が走り、そのたびにリストが勝手にスクロールして見える不具合)。
+  // 破棄前に明示的にblurしておくことで、この暗黙スクロールを防ぐ。
+  if (document.activeElement instanceof HTMLElement && node.contains(document.activeElement)) {
+    document.activeElement.blur();
+  }
   while (node.firstChild) node.removeChild(node.firstChild);
 }
 
@@ -96,6 +105,29 @@ export function injectBaseStyles(): void {
   const style = document.createElement('style');
   style.textContent = BASE_CSS;
   document.head.appendChild(style);
+  installFocusWorkaround();
+}
+
+/**
+ * VS Codeのwebviewパネルを開いた/切り替えた直後は、OSレベルのフォーカスが
+ * webview(iframe)自体にまだ入っていないことがある。その状態で入力欄等を
+ * クリックすると、1回目のクリックが「webviewにフォーカスを移す」ことに
+ * 消費されてしまい、クリックした要素自体には実際のフォーカス/キャレットが
+ * 入らず、もう一度クリックしないと入力できないことがある(Windows環境で
+ * 報告あり、macOSでは未確認)。mousedownの捕捉フェーズで対象のフォーム
+ * 要素へ明示的にfocus()を要求することで、1回目のクリックで確実に
+ * フォーカスさせる。
+ */
+function installFocusWorkaround(): void {
+  document.addEventListener(
+    'mousedown',
+    (e) => {
+      const target = e.target as HTMLElement | null;
+      const field = target?.closest('input, select, textarea, button') as HTMLElement | null;
+      if (field && document.activeElement !== field) field.focus();
+    },
+    true
+  );
 }
 
 const BASE_CSS = `

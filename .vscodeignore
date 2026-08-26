@@ -11,7 +11,7 @@ node_modules/**
 .gitignore
 **/*.map
 **/.eslintrc.json
-# sample/ をワークスペースとして単体で開いてテストした際に誤って作られる
-# ことがある副産物。ルート直下の .canlogger/ (意図した同梱サンプル) だけ
-# パッケージに含める。
-sample/.canlogger/**
+# sample/.canlogger/ はサンプルワークスペース本体なのでVSIXにも同梱する
+# (除外しない)。もしルートをワークスペースとして開いて誤って作られてしまった
+# 場合の副産物だけ除外する。
+/.canlogger/**

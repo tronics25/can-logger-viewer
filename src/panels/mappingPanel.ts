@@ -95,10 +95,12 @@ export function openMappingPanel(extensionUri: vscode.Uri, profileId: string): v
 function postInit(panel: vscode.WebviewPanel, profileId: string): void {
   const file = loadLoggerMappings();
   const profile = file.profiles.find((p) => p.id === profileId);
+  const specs = loadLoggerSpecs();
   panel.webview.postMessage({
     type: 'init',
     profile,
-    items: loadLoggerSpecs().items,
+    items: specs.items,
+    categories: specs.categories,
     canIds: loadLoggerCanIds(),
   });
 }
@@ -134,5 +136,9 @@ export function deleteMappingProfile(profileId: string): void {
 
 function makeEmptyProfile(id: string, name: string): LoggerMappingProfile {
   const emptySlots = () => Array.from({ length: 8 }, (_, i) => ({ slot: i, itemId: null }));
-  return { id, name, slots: { 1: emptySlots(), 2: emptySlots(), 3: emptySlots(), 4: emptySlots(), 5: emptySlots() } };
+  return {
+    id,
+    name,
+    slots: { 1: emptySlots(), 2: emptySlots(), 3: emptySlots(), 4: emptySlots(), 5: emptySlots(), 6: emptySlots() },
+  };
 }

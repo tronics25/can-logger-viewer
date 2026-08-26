@@ -83,10 +83,10 @@ export function loggerItemsOverlap(
 }
 
 // ---------------------------------------------------------------------------
-// Logger 1〜5 ⇔ 実CAN ID (.canlogger/logger-can-ids.json)
+// Logger 1〜6 ⇔ 実CAN ID (.canlogger/logger-can-ids.json)
 // ---------------------------------------------------------------------------
 
-export type LoggerNumber = 1 | 2 | 3 | 4 | 5;
+export type LoggerNumber = 1 | 2 | 3 | 4 | 5 | 6;
 
 export interface CanIdRef {
   /** 数値のCAN ID (標準11bit または 拡張29bit) */
@@ -104,7 +104,7 @@ export interface LoggerCanIdsFile {
 }
 
 export const DEFAULT_LOGGER_CAN_IDS: LoggerCanIdsFile = {
-  assignments: [1, 2, 3, 4, 5].map((n) => ({
+  assignments: [1, 2, 3, 4, 5, 6].map((n) => ({
     loggerNumber: n as LoggerNumber,
     canId: { id: 0x181 + (n - 1), extended: false },
   })),
@@ -124,7 +124,7 @@ export interface LoggerMappingSlot {
 export interface LoggerMappingProfile {
   id: string;
   name: string;
-  /** Logger番号(1〜5) -> スロット配列 */
+  /** Logger番号(1〜6) -> スロット配列 */
   slots: Record<LoggerNumber, LoggerMappingSlot[]>;
 }
 
@@ -140,7 +140,14 @@ export function newMappingProfile(id: string, name: string): LoggerMappingProfil
   return {
     id,
     name,
-    slots: { 1: emptyMappingSlots(), 2: emptyMappingSlots(), 3: emptyMappingSlots(), 4: emptyMappingSlots(), 5: emptyMappingSlots() },
+    slots: {
+      1: emptyMappingSlots(),
+      2: emptyMappingSlots(),
+      3: emptyMappingSlots(),
+      4: emptyMappingSlots(),
+      5: emptyMappingSlots(),
+      6: emptyMappingSlots(),
+    },
   };
 }
 

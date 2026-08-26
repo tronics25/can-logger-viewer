@@ -12,7 +12,7 @@ import {
   LoggerSpecsFile,
 } from '../models/types';
 import { clear, el, injectBaseStyles, vscodeApi } from './common';
-import { LoggerColumn, LoggerRow, WireFrame, buildLoggerRows, loggerColumnsFor } from './loggerRows';
+import { LoggerColumn, LoggerRow, WireFrame, buildChartData, buildLoggerRows, loggerColumnsFor } from './loggerRows';
 import { renderTimeSeriesTab } from './timeSeriesChart';
 import { renderThreeDTab, stopThreeDPlayback } from './threeDChart';
 import { measureMaxCellWidth, renderVirtualTable } from './virtualList';
@@ -56,6 +56,17 @@ function matchesFilter(f: WireFrame): boolean {
 
 function findFixedFormatEntry(f: WireFrame): FixedFormatCanIdEntry | undefined {
   return fixedFormat.find((e) => e.canId.id === f.canId && e.canId.extended === f.extended);
+}
+
+/** そのCAN IDが何者か (Logger番号 or 固定フォーマットフレーム名) を一目で分かるようにする。 */
+function frameLabel(f: WireFrame): string {
+  const loggerAssignment = loggerCanIds.assignments.find(
+    (a) => a.canId.id === f.canId && a.canId.extended === f.extended
+  );
+  if (loggerAssignment) return `Logger${loggerAssignment.loggerNumber}`;
+  const entry = findFixedFormatEntry(f);
+  if (entry) return entry.name;
+  return '';
 }
 
 function buildContentCell(f: WireFrame): HTMLElement {
@@ -142,7 +153,7 @@ function renderRawTab(container: HTMLElement): void {
   ]);
 
   const legend = el('div', { class: 'sub', style: 'flex:0 0 auto' }, [
-    '信号名 値 単位 = 固定フォーマットフレーム登録済み（パース済み表示）　/　16進バイト列 = 未登録・またはLogger（Loggerタブで確認）　/　DLC = ログ上のDLCコード値(16進、Classic CANは実バイト数と同じ)　/　Length = 実データ長(バイト)',
+    '信号名 値 単位 = 固定フォーマットフレーム登録済み（パース済み表示）　/　16進バイト列 = 未登録・またはLogger（Loggerタブで確認）　/　名称 = Logger CAN ID設定・固定フォーマットフレーム名から自動判定　/　DLC = ログ上のDLCコード値(16進、Classic CANは実バイト数と同じ)　/　Length = 実データ長(バイト)',
   ]);
 
   clear(container);
@@ -162,6 +173,7 @@ function renderRawTab(container: HTMLElement): void {
       { label: 'Time (s)', width: '90px' },
       { label: 'TX/RX', width: '56px' },
       { label: 'CAN ID', width: '110px' },
+      { label: 'NAME', width: '130px' },
       { label: 'Ch', width: '48px' },
       { label: 'DLC', width: '48px' },
       { label: 'Length', width: '64px' },
@@ -171,10 +183,12 @@ function renderRawTab(container: HTMLElement): void {
     emptyMessage: '該当するフレームがありません。',
     renderRow: (i) => {
       const f = filtered[i];
+      const label = frameLabel(f);
       return [
         el('span', { class: 'mono' }, [f.t.toFixed(4)]),
         f.dir,
         el('span', { class: 'mono' }, [formatCanId(canIdRef(f))]),
+        label ? el('span', { title: label }, [label]) : el('span', { class: 'sub' }, ['—']),
         el('span', { class: 'mono' }, [String(f.channel)]),
         el('span', { class: 'mono' }, [f.dlcCode.toString(16).toUpperCase()]),
         el('span', { class: 'mono' }, [String(f.dlc)]),
@@ -185,7 +199,7 @@ function renderRawTab(container: HTMLElement): void {
 }
 
 function exportRawCsv(rows: WireFrame[]): void {
-  const lines = ['Time,TX/RX,CAN ID,CONTENT'];
+  const lines = ['Time,TX/RX,CAN ID,Name,Ch,DLC,Length,CONTENT'];
   for (const f of rows) {
     const entry = findFixedFormatEntry(f);
     let content: string;
@@ -197,7 +211,18 @@ function exportRawCsv(rows: WireFrame[]): void {
         .map((b) => b.toString(16).toUpperCase().padStart(2, '0'))
         .join(' ');
     }
-    lines.push([f.t.toFixed(4), f.dir, formatCanId(canIdRef(f)), csvEscape(content)].join(','));
+    lines.push(
+      [
+        f.t.toFixed(4),
+        f.dir,
+        formatCanId(canIdRef(f)),
+        csvEscape(frameLabel(f)),
+        String(f.channel),
+        f.dlcCode.toString(16).toUpperCase(),
+        String(f.dlc),
+        csvEscape(content),
+      ].join(',')
+    );
   }
   api.postMessage({ type: 'exportCsv', csv: lines.join('\n'), suggestedName: `${fileName}.raw.csv` });
 }
@@ -266,12 +291,12 @@ function renderLoggerTab(container: HTMLElement): void {
   if (activeLoggerSubTab === 'table') {
     renderLoggerTable(subContent, profile);
   } else if (activeLoggerSubTab === 'timeseries') {
-    const columns = loggerColumnsFor(profile, loggerSpecs);
-    const rows = buildLoggerRows(profile, frames, loggerSpecs, loggerCanIds);
-    renderTimeSeriesTab(subContent, rows, columns, loggerSpecs.categories);
+    // 時系列・3Dグラフでは、Logger項目に加えて固定フォーマットフレームの
+    // 信号も同じ時系列に混ぜて選択できるようにする。
+    const { columns, rows } = buildChartData(profile, frames, loggerSpecs, loggerCanIds, fixedFormat);
+    renderTimeSeriesTab(subContent, rows, columns);
   } else {
-    const columns = loggerColumnsFor(profile, loggerSpecs);
-    const rows = buildLoggerRows(profile, frames, loggerSpecs, loggerCanIds);
+    const { columns, rows } = buildChartData(profile, frames, loggerSpecs, loggerCanIds, fixedFormat);
     renderThreeDTab(subContent, rows, columns);
   }
 

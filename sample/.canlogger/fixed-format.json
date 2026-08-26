@@ -1,0 +1,127 @@
+{
+  "entries": [
+    {
+      "id": "ff-2a0",
+      "canId": { "id": 672, "extended": false },
+      "name": "車速センサーCAN",
+      "frameLength": 64,
+      "signals": [
+        {
+          "id": "sig-speed",
+          "name": "車速",
+          "unit": "km/h",
+          "byteOffset": 0,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "lsb": 0.1,
+          "offset": 0,
+          "byteOrder": "little"
+        },
+        {
+          "id": "sig-batt",
+          "name": "バッテリ電圧",
+          "unit": "V",
+          "byteOffset": 2,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "lsb": 0.01,
+          "offset": 0,
+          "byteOrder": "little"
+        },
+        {
+          "id": "sig-temp",
+          "name": "モーター温度",
+          "unit": "℃",
+          "byteOffset": 40,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "lsb": 0.1,
+          "offset": -40,
+          "byteOrder": "little"
+        }
+      ]
+    },
+    {
+      "id": "ff-300",
+      "canId": { "id": 768, "extended": false },
+      "name": "ブレーキシステムCAN",
+      "frameLength": 8,
+      "signals": [
+        {
+          "id": "sig-brake-pressure",
+          "name": "ブレーキ圧",
+          "unit": "bar",
+          "byteOffset": 0,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "lsb": 0.1,
+          "offset": 0,
+          "byteOrder": "little"
+        },
+        {
+          "id": "sig-pedal",
+          "name": "ペダル踏込量",
+          "unit": "%",
+          "byteOffset": 2,
+          "bitOffset": 0,
+          "lengthBits": 16,
+          "lsb": 0.1,
+          "offset": 0,
+          "byteOrder": "little"
+        }
+      ]
+    },
+    {
+      "id": "ff-310",
+      "canId": { "id": 784, "extended": false },
+      "name": "灯火系CAN",
+      "frameLength": 8,
+      "signals": [
+        {
+          "id": "sig-headlight",
+          "name": "ヘッドライトON/OFF",
+          "unit": "",
+          "byteOffset": 0,
+          "bitOffset": 0,
+          "lengthBits": 1,
+          "lsb": 1,
+          "offset": 0,
+          "byteOrder": "big"
+        },
+        {
+          "id": "sig-turn-left",
+          "name": "左ウインカー",
+          "unit": "",
+          "byteOffset": 0,
+          "bitOffset": 1,
+          "lengthBits": 1,
+          "lsb": 1,
+          "offset": 0,
+          "byteOrder": "big"
+        },
+        {
+          "id": "sig-turn-right",
+          "name": "右ウインカー",
+          "unit": "",
+          "byteOffset": 0,
+          "bitOffset": 2,
+          "lengthBits": 1,
+          "lsb": 1,
+          "offset": 0,
+          "byteOrder": "big"
+        },
+        {
+          "id": "sig-horn",
+          "name": "ホーン",
+          "unit": "",
+          "byteOffset": 0,
+          "bitOffset": 3,
+          "lengthBits": 1,
+          "lsb": 1,
+          "offset": 0,
+          "byteOrder": "big"
+        }
+      ]
+    }
+  ]
+}

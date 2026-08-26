@@ -2,6 +2,7 @@
 import { formatCanId } from '../decode/canId';
 import {
   CanIdRef,
+  LoggerCategory,
   LoggerItemSpec,
   LoggerMappingProfile,
   LoggerNumber,
@@ -13,11 +14,73 @@ import { clear, el, icon, injectBaseStyles, vscodeApi } from './common';
 const api = vscodeApi();
 let profile: LoggerMappingProfile | undefined;
 let items: LoggerItemSpec[] = [];
+let categories: LoggerCategory[] = [];
 let canIds: { assignments: { loggerNumber: LoggerNumber; canId: CanIdRef }[] } = { assignments: [] };
 let selectedLogger: LoggerNumber = 1;
+/** カテゴリ選択後・項目未選択の間だけ保持する一時状態 (保存対象ではない)。 */
+const pendingCategoryForSlot = new WeakMap<object, number>();
+const UNSET = -1;
 
-function itemLabel(item: LoggerItemSpec): string {
-  return `${item.name} (${item.categoryNumber}-${dataNumberRangeLabel(item)})`;
+function categoryLabel(catNum: number): string {
+  const cat = categories.find((c) => c.number === catNum);
+  return cat ? `${cat.number}: ${cat.name}` : `分類${catNum}`;
+}
+
+/**
+ * 項目の割り当てを「分類を選ぶ→その中のデータを選ぶ」の2段階にする
+ * (項目数が多いと、分類を挟まないフラットな一覧から探すのが大変なため)。
+ */
+function buildItemPicker(slot: { slot: number; itemId: string | null }): HTMLElement {
+  // 分類変更中(pendingCategoryForSlotにある)は常にそちらを優先する。
+  // itemIdからの逆引きは、分類セレクトを操作した直後ではない通常時のみ使う
+  // (分類を変えた瞬間にitemIdもクリアするので、通常はどちらか一方だけが
+  // 有効な情報になる)。
+  const currentItem = items.find((i) => i.id === slot.itemId);
+  const selectedCategory = pendingCategoryForSlot.has(slot)
+    ? pendingCategoryForSlot.get(slot)!
+    : (currentItem?.categoryNumber ?? UNSET);
+
+  const usedCategoryNumbers = [...new Set(items.map((i) => i.categoryNumber))].sort((a, b) => a - b);
+
+  const categorySelect = el('select', { style: 'max-width:150px' }) as HTMLSelectElement;
+  categorySelect.appendChild(el('option', { value: String(UNSET) }, ['（未設定 — 応答0xFFFF）']) as HTMLOptionElement);
+  for (const catNum of usedCategoryNumbers) {
+    const opt = el('option', { value: String(catNum) }, [categoryLabel(catNum)]) as HTMLOptionElement;
+    if (catNum === selectedCategory) opt.selected = true;
+    categorySelect.appendChild(opt);
+  }
+  categorySelect.addEventListener('change', () => {
+    const v = parseInt(categorySelect.value, 10);
+    // 分類を変えたら、選択済みのデータ(項目)は必ず未選択に戻す
+    // (古い項目のitemIdが残っていると、次の描画でその項目の分類が
+    // 優先されてしまい分類セレクトが元に戻って見える不具合になるため)。
+    slot.itemId = null;
+    if (v === UNSET) pendingCategoryForSlot.delete(slot);
+    else pendingCategoryForSlot.set(slot, v);
+    save();
+    render();
+  });
+
+  const itemSelect = el('select', { style: 'max-width:200px' }) as HTMLSelectElement;
+  if (selectedCategory === UNSET) {
+    itemSelect.appendChild(el('option', { value: '' }, ['―']) as HTMLOptionElement);
+    itemSelect.disabled = true;
+  } else {
+    itemSelect.appendChild(el('option', { value: '' }, ['（項目を選択）']) as HTMLOptionElement);
+    for (const it of items.filter((i) => i.categoryNumber === selectedCategory)) {
+      const opt = el('option', { value: it.id }, [`${it.name} (${dataNumberRangeLabel(it)})`]) as HTMLOptionElement;
+      if (it.id === slot.itemId) opt.selected = true;
+      itemSelect.appendChild(opt);
+    }
+  }
+  itemSelect.addEventListener('change', () => {
+    pendingCategoryForSlot.delete(slot);
+    slot.itemId = itemSelect.value || null;
+    save();
+    render();
+  });
+
+  return el('div', { style: 'display:flex;gap:4px' }, [categorySelect, itemSelect]);
 }
 
 function save(): void {
@@ -61,7 +124,7 @@ function render(): void {
 
 function buildLoggerList(): HTMLElement {
   const list = el('div', { style: 'width:220px;flex:0 0 220px' });
-  for (let n = 1; n <= 5; n++) {
+  for (let n = 1; n <= 6; n++) {
     const loggerNumber = n as LoggerNumber;
     const used = (profile?.slots[loggerNumber] ?? []).filter((s) => s.itemId).length;
     const total = (profile?.slots[loggerNumber] ?? []).length;
@@ -141,18 +204,7 @@ function buildSlotPanel(): HTMLElement {
       render();
     });
 
-    const select = el('select') as HTMLSelectElement;
-    select.appendChild(el('option', { value: '' }, ['（未設定 — 応答0xFFFF）']) as HTMLOptionElement);
-    for (const it of items) {
-      const opt = el('option', { value: it.id }, [itemLabel(it)]) as HTMLOptionElement;
-      if (it.id === slot.itemId) opt.selected = true;
-      select.appendChild(opt);
-    }
-    select.addEventListener('change', () => {
-      slot.itemId = select.value || null;
-      save();
-      render();
-    });
+    const picker = buildItemPicker(slot);
 
     const delBtn = el('button', { class: 'icon-btn', title: 'スロットを削除' }, [icon('trash')]);
     delBtn.addEventListener('click', () => {
@@ -165,7 +217,7 @@ function buildSlotPanel(): HTMLElement {
     const tr = el('tr', {}, [
       el('td', {}, [slotInput]),
       el('td', { class: 'mono' }, [`${byteStart}-${byteStart + byteLen - 1}`]),
-      el('td', {}, [select]),
+      el('td', {}, [picker]),
       el('td', { class: 'mono' }, [item ? `${item.categoryNumber}-${dataNumberRangeLabel(item)}` : '0-0']),
       el('td', {}, [isEmpty ? el('span', { class: 'nc-cell' }, ['0xFFFF']) : el('span', { class: 'tag' }, [item!.dataLength])]),
       el('td', {}, [delBtn]),
@@ -201,6 +253,7 @@ window.addEventListener('message', (event) => {
   if (msg.type === 'init') {
     profile = msg.profile;
     items = msg.items;
+    categories = msg.categories;
     canIds = msg.canIds;
     render();
   }

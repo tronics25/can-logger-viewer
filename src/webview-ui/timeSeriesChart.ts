@@ -1,8 +1,8 @@
 // Webview UI: Loggerタブ - 時系列グラフ
-import { DecodedValue, LoggerCategory } from '../models/types';
+import { ClampState, DecodedValue } from '../models/types';
 import { clear, el } from './common';
 import { CLAMP_MAX_COLOR, CLAMP_MIN_COLOR, fmtNum, fmtTime, paletteColor } from './chartUtils';
-import { LoggerColumn, LoggerRow } from './loggerRows';
+import { ChartColumn, ChartRow } from './loggerRows';
 
 const VB_W = 860;
 const VB_H = 380;
@@ -12,36 +12,113 @@ const ROW_LIMIT = 4000;
 let selectedItemIds = new Set<string>();
 let mode: 'raw' | 'normalized' = 'raw';
 let pickerFilter = '';
+/** 項目ごとの線色の手動指定 (未指定ならpaletteColorの自動割り当てを使う)。 */
+const colorOverrides = new Map<string, string>();
+/** ホイールでズームした時間範囲。nullなら全範囲表示。 */
+let zoomRange: { tMin: number; tMax: number } | null = null;
 
-export function renderTimeSeriesTab(
-  container: HTMLElement,
-  rows: LoggerRow[],
-  columns: LoggerColumn[],
-  categories: LoggerCategory[]
-): void {
-  const validIds = new Set(columns.map((c) => c.item.id));
+// 線色選択用のプリセットパレット。ネイティブの<input type="color">はVS Codeの
+// サンドボックス化されたwebview内でOSカラーピッカーが正しく開かないことが
+// あるため使わず、クリックで開く自前のスウォッチ一覧に置き換えている。
+const COLOR_PRESETS = [
+  '#2563eb', '#dc2626', '#16a34a', '#d97706', '#7c3aed', '#0891b2',
+  '#db2777', '#65a30d', '#4f46e5', '#ea580c', '#0d9488', '#be123c',
+  '#334155', '#a16207', '#15803d', '#9333ea',
+];
+
+export function renderTimeSeriesTab(container: HTMLElement, rows: ChartRow[], columns: ChartColumn[]): void {
+  const validIds = new Set(columns.map((c) => c.id));
   for (const id of [...selectedItemIds]) if (!validIds.has(id)) selectedItemIds.delete(id);
 
-  const rerender = () => renderTimeSeriesTab(container, rows, columns, categories);
+  // 別のログ/プロファイルに切り替わり、ズーム範囲が今のデータと重ならなく
+  // なった場合はリセットする (空のグラフになってしまうのを防ぐ)。
+  if (zoomRange && rows.length > 0) {
+    const fullTMin = rows[0].t;
+    const fullTMax = rows[rows.length - 1].t;
+    if (zoomRange.tMax < fullTMin || zoomRange.tMin > fullTMax) zoomRange = null;
+  }
+
+  const rerender = () => renderTimeSeriesTab(container, rows, columns);
 
   const colorForItem = new Map<string, string>();
-  columns.forEach((c, i) => colorForItem.set(c.item.id, paletteColor(i)));
+  columns.forEach((c, i) => colorForItem.set(c.id, colorOverrides.get(c.id) ?? paletteColor(i)));
 
   clear(container);
   const layout = el('div', { style: 'display:flex;gap:18px;align-items:flex-start' });
   layout.append(
-    buildPicker(columns, categories, colorForItem, rerender),
+    buildPicker(columns, colorForItem, rerender),
     buildChartArea(rows.slice(-ROW_LIMIT), columns, colorForItem, rerender)
   );
   container.appendChild(layout);
 }
 
-function buildPicker(
-  columns: LoggerColumn[],
-  categories: LoggerCategory[],
-  colorForItem: Map<string, string>,
-  rerender: () => void
-): HTMLElement {
+/**
+ * 線色を選ぶ小さな正方形ボタン。クリックでプリセットパレットのポップアップを
+ * 開く (VS Codeのwebview内ではネイティブ<input type="color">のOSダイアログが
+ * 正しく開かないことがあるため使わない)。
+ */
+function buildColorSwatchButton(itemId: string, currentColor: string, rerender: () => void): HTMLElement {
+  const btn = el('button', {
+    type: 'button',
+    title: '線の色を選択',
+    style: `width:14px;height:14px;padding:0;border:1px solid var(--vscode-panel-border);border-radius:3px;background:${currentColor};flex:0 0 auto;cursor:pointer;`,
+  }) as HTMLButtonElement;
+
+  let popup: HTMLElement | null = null;
+  let onDocClick: ((e: MouseEvent) => void) | null = null;
+
+  function closePopup(): void {
+    if (popup) {
+      popup.remove();
+      popup = null;
+    }
+    if (onDocClick) {
+      document.removeEventListener('mousedown', onDocClick, true);
+      onDocClick = null;
+    }
+  }
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (popup) {
+      closePopup();
+      return;
+    }
+    popup = el('div', {
+      style:
+        'position:absolute;z-index:20;display:grid;grid-template-columns:repeat(4,18px);gap:4px;' +
+        'padding:6px;border:1px solid var(--vscode-panel-border);border-radius:5px;' +
+        'background:var(--vscode-editor-background);box-shadow:0 2px 8px rgba(0,0,0,0.2);',
+    });
+    for (const color of COLOR_PRESETS) {
+      const swatch = el('button', {
+        type: 'button',
+        title: color,
+        style: `width:18px;height:18px;padding:0;border:1px solid var(--vscode-panel-border);border-radius:3px;background:${color};cursor:pointer;`,
+      }) as HTMLButtonElement;
+      swatch.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        colorOverrides.set(itemId, color);
+        closePopup();
+        rerender();
+      });
+      popup.appendChild(swatch);
+    }
+    document.body.appendChild(popup);
+    const btnRect = btn.getBoundingClientRect();
+    popup.style.left = `${btnRect.left + window.scrollX}px`;
+    popup.style.top = `${btnRect.bottom + window.scrollY + 4}px`;
+
+    onDocClick = (ev) => {
+      if (popup && !popup.contains(ev.target as Node) && ev.target !== btn) closePopup();
+    };
+    document.addEventListener('mousedown', onDocClick, true);
+  });
+
+  return btn;
+}
+
+function buildPicker(columns: ChartColumn[], colorForItem: Map<string, string>, rerender: () => void): HTMLElement {
   const wrap = el('div', { style: 'width:230px;flex:0 0 230px' });
 
   const search = el('input', {
@@ -61,38 +138,35 @@ function buildPicker(
     return wrap;
   }
 
-  const byCategory = new Map<number, LoggerColumn[]>();
+  const byGroup = new Map<string, ChartColumn[]>();
   for (const c of columns) {
-    if (pickerFilter && !c.item.name.toLowerCase().includes(pickerFilter.toLowerCase())) continue;
-    const arr = byCategory.get(c.item.categoryNumber) ?? [];
+    if (pickerFilter && !c.name.toLowerCase().includes(pickerFilter.toLowerCase())) continue;
+    const arr = byGroup.get(c.groupLabel) ?? [];
     arr.push(c);
-    byCategory.set(c.item.categoryNumber, arr);
+    byGroup.set(c.groupLabel, arr);
   }
 
-  for (const [catNum, cols] of [...byCategory.entries()].sort((a, b) => a[0] - b[0])) {
-    const catName = categories.find((c) => c.number === catNum)?.name ?? '';
+  for (const [groupLabel, cols] of [...byGroup.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
     wrap.appendChild(
-      el('div', { class: 'sub', style: 'margin:10px 0 2px;text-transform:uppercase;font-size:10.5px' }, [
-        `${catNum}: ${catName}`,
-      ])
+      el('div', { class: 'sub', style: 'margin:10px 0 2px;text-transform:uppercase;font-size:10.5px' }, [groupLabel])
     );
     for (const col of cols) {
-      const row = el('label', {
-        style: 'display:flex;align-items:center;gap:6px;padding:3px 0;cursor:pointer;font-size:12px',
-      });
+      // スウォッチボタンをlabelの外に置く (label内にネストすると、環境に
+      // よってはクリックがラベル経由でチェックボックスにも転送されてしまい
+      // 挙動が不安定になるため、チェックボックス部分とスウォッチ部分を
+      // はっきり分ける)。
+      const row = el('div', { style: 'display:flex;align-items:center;gap:6px;padding:3px 0;font-size:12px' });
+      const label = el('label', { style: 'display:flex;align-items:center;gap:6px;flex:1;min-width:0;cursor:pointer' });
       const cb = el('input', { type: 'checkbox' }) as HTMLInputElement;
-      cb.checked = selectedItemIds.has(col.item.id);
+      cb.checked = selectedItemIds.has(col.id);
       cb.addEventListener('change', () => {
-        if (cb.checked) selectedItemIds.add(col.item.id);
-        else selectedItemIds.delete(col.item.id);
+        if (cb.checked) selectedItemIds.add(col.id);
+        else selectedItemIds.delete(col.id);
         rerender();
       });
-      const swatch = el('span', {
-        style: `display:inline-block;width:10px;height:10px;border-radius:2px;background:${colorForItem.get(
-          col.item.id
-        )};margin-left:auto`,
-      });
-      row.append(cb, el('span', {}, [col.item.name]), swatch);
+      label.append(cb, el('span', {}, [col.name]));
+      const swatchBtn = buildColorSwatchButton(col.id, colorForItem.get(col.id)!, rerender);
+      row.append(label, swatchBtn);
       wrap.appendChild(row);
     }
   }
@@ -100,13 +174,13 @@ function buildPicker(
 }
 
 function buildChartArea(
-  rows: LoggerRow[],
-  columns: LoggerColumn[],
+  rows: ChartRow[],
+  columns: ChartColumn[],
   colorForItem: Map<string, string>,
   rerender: () => void
 ): HTMLElement {
   const area = el('div', { style: 'flex:1;min-width:0' });
-  const selectedCols = columns.filter((c) => selectedItemIds.has(c.item.id));
+  const selectedCols = columns.filter((c) => selectedItemIds.has(c.id));
 
   const rawBtn = el('button', { class: mode === 'raw' ? 'primary' : '' }, ['実値']) as HTMLButtonElement;
   rawBtn.addEventListener('click', () => {
@@ -118,20 +192,47 @@ function buildChartArea(
     mode = 'normalized';
     rerender();
   });
-  area.appendChild(
-    el('div', { class: 'toolbar' }, [
-      el('span', {}, ['表示:']),
-      el('div', { class: 'segmented' }, [rawBtn, normBtn]),
-      el('span', { class: 'sub', style: 'margin:0 0 0 8px' }, [
-        '▲=MAX到達　▼=MIN到達（点で表示、線色は項目識別用）',
-      ]),
-    ])
-  );
+  const toolbar = el('div', { class: 'toolbar' }, [
+    el('span', {}, ['表示:']),
+    el('div', { class: 'segmented' }, [rawBtn, normBtn]),
+    el('span', { class: 'sub', style: 'margin:0 0 0 8px' }, [
+      '▲=MAXに到達/脱した瞬間　▼=MINに到達/脱した瞬間　/　ホイールで左右移動・＋－でズーム',
+    ]),
+  ]);
 
   if (rows.length === 0) {
     area.appendChild(el('div', { class: 'sub' }, ['表示できるデータがありません。']));
+    area.appendChild(toolbar);
     return area;
   }
+
+  const fullTMin = rows[0].t;
+  const fullTMax = rows[rows.length - 1].t;
+
+  area.appendChild(toolbar);
+
+  // ズーム操作は「表示:」トグル+ヒント文と同じtoolbar(flex-wrap)を共有させず、
+  // 専用の行として独立させる。同じ行を共有していると、パネル幅が狭くヒント文が
+  // 折り返された際にflex:1のspacerがその折返し行側に取り込まれてほぼ潰れ、
+  // ＋/－とリセットボタンが独自の行へ回り込む形になり、リセットボタンの
+  // 有無で＋/－の位置が変わってしまっていた(初回クリック時とそれ以降で押下
+  // 位置が変わる不具合の原因)。＋/－を常に行の先頭に置き、リセットボタンは
+  // その後ろにだけ追加することで、＋/－の位置は常に固定される。
+  const zoomBtns = el('div', { class: 'segmented' }, [
+    zoomButton('－', 1.5, fullTMin, fullTMax, rerender),
+    zoomButton('＋', 1 / 1.5, fullTMin, fullTMax, rerender),
+  ]);
+  const zoomToolbar = el('div', { class: 'toolbar', style: 'margin-top:-4px' }, [zoomBtns]);
+  if (zoomRange) {
+    const resetBtn = el('button', {}, ['ズームリセット']) as HTMLButtonElement;
+    resetBtn.addEventListener('click', () => {
+      zoomRange = null;
+      rerender();
+    });
+    zoomToolbar.append(resetBtn);
+  }
+  area.appendChild(zoomToolbar);
+
   if (selectedCols.length === 0) {
     area.appendChild(el('div', { class: 'sub' }, ['左の一覧から表示する項目を選んでください。']));
     return area;
@@ -142,30 +243,117 @@ function buildChartArea(
     legend.appendChild(
       el('span', {}, [
         el('span', {
-          style: `display:inline-block;width:12px;height:3px;background:${colorForItem.get(
-            col.item.id
-          )};margin-right:5px;vertical-align:2px`,
+          style: `display:inline-block;width:12px;height:3px;background:${colorForItem.get(col.id)};margin-right:5px;vertical-align:2px`,
         }),
-        `${col.item.name} (${col.item.unit})`,
+        `${col.name} (${col.unit})`,
       ])
     );
   }
   area.appendChild(legend);
 
-  const { svg, tMin, tMax } = buildSvg(rows, selectedCols, colorForItem, mode);
+  // ズーム範囲が指定されていれば、その時間範囲内の行だけを描画対象にする。
+  // ウィンドウ内にたまたま1点もない(実データの間隔がズーム幅より広い)場合は、
+  // 空表示にせず直前・直後の点を補って線がつながるようにする
+  // (「ズーム範囲内にデータがありません」を極力出さないようにするため)。
+  let visibleRows = zoomRange ? rows.filter((r) => r.t >= zoomRange!.tMin && r.t <= zoomRange!.tMax) : rows;
+  if (visibleRows.length === 0 && zoomRange) {
+    const before = [...rows].reverse().find((r) => r.t < zoomRange!.tMin);
+    const after = rows.find((r) => r.t > zoomRange!.tMax);
+    visibleRows = [before, after].filter((r): r is ChartRow => !!r);
+  }
+  if (visibleRows.length === 0) {
+    area.appendChild(el('div', { class: 'sub' }, ['表示できるデータがありません。']));
+    return area;
+  }
+
+  const { svg, tMin, tMax } = buildSvg(visibleRows, selectedCols, colorForItem, mode);
   const svgHost = el('div', { style: 'position:relative' });
   svgHost.innerHTML = svg;
   area.appendChild(svgHost);
 
   const svgEl = svgHost.querySelector('svg');
-  if (svgEl) attachHoverTooltip(svgHost, svgEl, rows, selectedCols, colorForItem, tMin, tMax);
+  if (svgEl) {
+    attachHoverTooltip(svgHost, svgEl, visibleRows, selectedCols, colorForItem, tMin, tMax);
+    attachWheelPan(svgEl, fullTMin, fullTMax, rerender);
+  }
 
   return area;
 }
 
+/** ＋－ボタン: 現在の表示範囲の中心を軸にズームする。 */
+function zoomButton(
+  label: string,
+  factor: number,
+  fullTMin: number,
+  fullTMax: number,
+  rerender: () => void
+): HTMLButtonElement {
+  const btn = el('button', { title: label === '＋' ? 'ズームイン' : 'ズームアウト' }, [label]) as HTMLButtonElement;
+  btn.addEventListener('click', () => {
+    const fullSpan = fullTMax - fullTMin || 1;
+    const curTMin = zoomRange ? zoomRange.tMin : fullTMin;
+    const curTMax = zoomRange ? zoomRange.tMax : fullTMax;
+    const curSpan = curTMax - curTMin;
+    const center = (curTMin + curTMax) / 2;
+    let newSpan = Math.min(fullSpan, Math.max(fullSpan * 0.005, curSpan * factor));
+    let newTMin = center - newSpan / 2;
+    let newTMax = center + newSpan / 2;
+    if (newTMin < fullTMin) {
+      newTMin = fullTMin;
+      newTMax = newTMin + newSpan;
+    }
+    if (newTMax > fullTMax) {
+      newTMax = fullTMax;
+      newTMin = newTMax - newSpan;
+    }
+    zoomRange = newSpan >= fullSpan - 1e-9 ? null : { tMin: newTMin, tMax: newTMax };
+    rerender();
+  });
+  return btn;
+}
+
+/**
+ * ホイールでカーソル位置を中心に時間範囲をズームする。preserveAspectRatio
+ * ="none"にしているため、マウス座標→SVGユーザー座標の変換は単純な線形
+ * スケールでよい(attachHoverTooltipと同じ考え方)。
+ */
+/** ホイールは左右移動(パン)専用。全体表示中(ズームなし)は何もしない。 */
+function attachWheelPan(svgEl: SVGElement, fullTMin: number, fullTMax: number, rerender: () => void): void {
+  svgEl.addEventListener(
+    'wheel',
+    (ev) => {
+      const fullSpan = fullTMax - fullTMin || 1;
+      const curTMin = zoomRange ? zoomRange.tMin : fullTMin;
+      const curTMax = zoomRange ? zoomRange.tMax : fullTMax;
+      const curSpan = curTMax - curTMin;
+      if (curSpan >= fullSpan - 1e-9) return; // 全体表示中は移動先が無い
+
+      ev.preventDefault();
+      const wheelEv = ev as WheelEvent;
+      // 横方向ホイール(Shift+ホイールやトラックパッド)があればdeltaXを優先する
+      const delta = Math.abs(wheelEv.deltaX) > Math.abs(wheelEv.deltaY) ? wheelEv.deltaX : wheelEv.deltaY;
+      const shift = (delta > 0 ? 1 : -1) * curSpan * 0.2;
+
+      let newTMin = curTMin + shift;
+      let newTMax = curTMax + shift;
+      if (newTMin < fullTMin) {
+        newTMin = fullTMin;
+        newTMax = newTMin + curSpan;
+      }
+      if (newTMax > fullTMax) {
+        newTMax = fullTMax;
+        newTMin = newTMax - curSpan;
+      }
+      zoomRange = { tMin: newTMin, tMax: newTMax };
+      rerender();
+    },
+    { passive: false }
+  );
+}
+
 function buildSvg(
-  rows: LoggerRow[],
-  cols: LoggerColumn[],
+  rows: ChartRow[],
+  cols: ChartColumn[],
   colorForItem: Map<string, string>,
   mode: 'raw' | 'normalized'
 ): { svg: string; tMin: number; tMax: number } {
@@ -177,7 +365,7 @@ function buildSvg(
 
   // 系列ごとの値域を事前計算 (raw=全系列共通 / normalized=系列ごと)
   const seriesValid: DecodedValue[][] = cols.map((c) =>
-    rows.map((r) => r.values.get(c.item.id)).filter((d): d is DecodedValue => !!d && d.clamp !== 'nc')
+    rows.map((r) => r.values.get(c.id)).filter((d): d is DecodedValue => !!d && d.clamp !== 'nc')
   );
   let sharedLo = 0;
   let sharedHi = 1;
@@ -216,11 +404,11 @@ function buildSvg(
   body += `<line x1="${MARGIN.left}" y1="${VB_H - MARGIN.bottom}" x2="${VB_W - MARGIN.right}" y2="${VB_H - MARGIN.bottom}" stroke="#c9c9c9"/>`;
 
   cols.forEach((col, i) => {
-    const color = colorForItem.get(col.item.id)!;
+    const color = colorForItem.get(col.id)!;
     let segment: string[] = [];
     const segments: string[][] = [];
     for (const row of rows) {
-      const d = row.values.get(col.item.id);
+      const d = row.values.get(col.id);
       if (!d || d.clamp === 'nc') {
         if (segment.length) segments.push(segment);
         segment = [];
@@ -233,30 +421,46 @@ function buildSvg(
       if (seg.length < 2) continue;
       body += `<polyline points="${seg.join(' ')}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
     }
+
+    // MAX/MINマーカーは「到達した瞬間」と「脱した瞬間」の遷移点だけに表示する
+    // (張り付いたまま続く区間の全点に出すと▲▼だらけになり線が見えなくなるため)。
+    let prevClamp: ClampState | undefined;
     for (const row of rows) {
-      const d = row.values.get(col.item.id);
-      if (!d || d.clamp === null || d.clamp === 'nc') continue;
-      const x = xOf(row.t);
-      const y = yOf(d.value, i);
-      body +=
-        d.clamp === 'max'
+      const d = row.values.get(col.id);
+      if (!d || d.clamp === 'nc') continue;
+      const cur = d.clamp;
+      const enteredOrLeftMax = (cur === 'max') !== (prevClamp === 'max');
+      const enteredOrLeftMin = (cur === 'min') !== (prevClamp === 'min');
+      if (enteredOrLeftMax || enteredOrLeftMin) {
+        const x = xOf(row.t);
+        const y = yOf(d.value, i);
+        // 遷移が「MAXに関するもの」か「MINに関するもの」かを優先判定する
+        // (通常MAX/MIN間を直接またぐことはないため、片方だけ真になる想定)。
+        body += enteredOrLeftMax
           ? `<polygon points="${x - 4},${y + 6} ${x + 4},${y + 6} ${x},${y - 2}" fill="${CLAMP_MAX_COLOR}"/>`
           : `<polygon points="${x - 4},${y - 6} ${x + 4},${y - 6} ${x},${y + 2}" fill="${CLAMP_MIN_COLOR}"/>`;
+      }
+      prevClamp = cur;
     }
   });
 
   body += `<text x="${MARGIN.left}" y="${VB_H - 8}" font-size="10" fill="#9a9a9a" font-family="ui-monospace,monospace">${fmtTime(tMin)}</text>`;
   body += `<text x="${VB_W - MARGIN.right}" y="${VB_H - 8}" font-size="10" fill="#9a9a9a" text-anchor="end" font-family="ui-monospace,monospace">${fmtTime(tMax)}</text>`;
 
-  const svg = `<svg viewBox="0 0 ${VB_W} ${VB_H}" width="100%" height="340" style="display:block">${body}</svg>`;
+  // preserveAspectRatio="none": 既定の"xMidYMid meet"だと表示ボックスと
+  // viewBoxの縦横比が違う場合にレターボックス(余白)が入り、マウス座標から
+  // SVGユーザー座標への単純な線形変換(attachHoverTooltip)が
+  // ズレる原因になっていたため、縦横独立にフィットさせて単純な線形変換で
+  // 正しく対応づくようにする。
+  const svg = `<svg viewBox="0 0 ${VB_W} ${VB_H}" width="100%" height="340" preserveAspectRatio="none" style="display:block;cursor:crosshair">${body}</svg>`;
   return { svg, tMin, tMax };
 }
 
 function attachHoverTooltip(
   hostEl: HTMLElement,
   svgEl: SVGElement,
-  rows: LoggerRow[],
-  cols: LoggerColumn[],
+  rows: ChartRow[],
+  cols: ChartColumn[],
   colorForItem: Map<string, string>,
   tMin: number,
   tMax: number
@@ -294,15 +498,13 @@ function attachHoverTooltip(
     clear(tooltip);
     tooltip.appendChild(el('div', { class: 'mono', style: 'font-weight:600;margin-bottom:3px' }, [fmtTime(nearest.t)]));
     for (const col of cols) {
-      const d = nearest.values.get(col.item.id);
+      const d = nearest.values.get(col.id);
       tooltip.appendChild(
         el('div', {}, [
           el('span', {
-            style: `display:inline-block;width:8px;height:8px;background:${colorForItem.get(
-              col.item.id
-            )};margin-right:5px;border-radius:2px`,
+            style: `display:inline-block;width:8px;height:8px;background:${colorForItem.get(col.id)};margin-right:5px;border-radius:2px`,
           }),
-          `${col.item.name}: ${d ? (d.clamp === 'nc' ? 'N.C.' : `${fmtNum(d.value)} ${col.item.unit}`) : '—'}`,
+          `${col.name}: ${d ? (d.clamp === 'nc' ? 'N.C.' : `${fmtNum(d.value)} ${col.unit}`) : '—'}`,
         ])
       );
     }

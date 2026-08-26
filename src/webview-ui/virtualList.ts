@@ -76,30 +76,33 @@ export function renderVirtualTable(host: HTMLElement, options: VirtualTableOptio
   let rowCount = options.rowCount;
 
   host.innerHTML = '';
-  host.style.display = 'flex';
-  host.style.flexDirection = 'column';
-  host.style.minHeight = '0';
+  host.style.display = 'block';
+  host.style.position = 'relative';
   host.style.border = '1px solid var(--vscode-panel-border)';
   host.style.borderRadius = '4px';
-  // 列の合計幅がホスト幅を超えたら横スクロールできるようにする。ヘッダーと
-  // 行本体(body)の両方を同じtotalWidthに固定することで、横スクロール時も
-  // 常にヘッダーと列が揃った状態で一緒に動く。
-  // overflow-xだけをautoにするとCSSの仕様上overflow-yも暗黙にautoへ昇格し、
-  // body側の縦スクロールと二重になってしまうため、overflow-yは明示的に
-  // hidden指定して縦スクロールはbody側だけに閉じ込める。
+  // 縦横どちらのスクロールも、この1つの要素(host)だけで扱う。ヘッダーと
+  // 行本体を別要素(host > header + 別のoverflow:autoな内側body)に分けると、
+  // 内側bodyの実幅が列合計幅ぶん広がるため、その"自分の右端"に出る縦スクロール
+  // バーが可視領域の外（横スクロールしないと見えない位置）に出てしまう。
+  // hostひとつだけをスクロールコンテナにすれば、縦横とも常に可視領域の端に
+  // スクロールバーが出る (ブラウザの標準的なoverflow:autoの挙動)。
   host.style.overflowX = 'auto';
-  host.style.overflowY = 'hidden';
+  host.style.overflowY = 'auto';
   if (options.height) host.style.height = options.height;
   else host.style.flex = '1';
+  host.style.minHeight = '0';
 
   if (rowCount === 0) {
     host.appendChild(el('div', { class: 'sub', style: 'padding:12px' }, [options.emptyMessage ?? 'データがありません。']));
     return { refresh: () => {}, scrollToIndex: () => {} };
   }
 
+  // ヘッダーはposition:stickyでhost内の上端に固定する。縦スクロールでは
+  // 常に見える位置に留まりつつ、横スクロールには追従して一緒に動く。
   const header = el('div', {
     style:
-      `display:grid;grid-template-columns:${gridColumns};flex:0 0 auto;width:${totalWidth}px;min-width:${totalWidth}px;` +
+      `display:grid;grid-template-columns:${gridColumns};width:${totalWidth}px;min-width:${totalWidth}px;` +
+      'position:sticky;top:0;z-index:1;' +
       'border-bottom:1px solid var(--vscode-panel-border);background:var(--vscode-editor-background);',
   });
   for (const col of options.columns) {
@@ -116,21 +119,18 @@ export function renderVirtualTable(host: HTMLElement, options: VirtualTableOptio
     );
   }
 
-  const body = el('div', {
-    style: `position:relative;flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;width:${totalWidth}px;min-width:${totalWidth}px;`,
-  });
-  const sizer = el('div', { style: 'position:relative;' });
+  const sizer = el('div', { style: `position:relative;width:${totalWidth}px;min-width:${totalWidth}px;` });
   const viewport = el('div', { style: 'position:absolute;top:0;left:0;right:0;' });
   sizer.appendChild(viewport);
-  body.appendChild(sizer);
-  host.append(header, body);
+  host.append(header, sizer);
 
   let rafId: number | null = null;
 
   function draw(): void {
     sizer.style.height = `${rowCount * rowHeight}px`;
-    const clientHeight = body.clientHeight || 400;
-    const scrollTop = Math.min(body.scrollTop, Math.max(0, rowCount * rowHeight - clientHeight));
+    const headerHeight = header.offsetHeight;
+    const clientHeight = Math.max(0, (host.clientHeight || 400) - headerHeight);
+    const scrollTop = Math.min(host.scrollTop, Math.max(0, rowCount * rowHeight - clientHeight));
     const start = Math.max(0, Math.floor(scrollTop / rowHeight) - OVERSCAN);
     const visibleCount = Math.ceil(clientHeight / rowHeight) + OVERSCAN * 2;
     const end = Math.min(rowCount, start + visibleCount);
@@ -162,7 +162,7 @@ export function renderVirtualTable(host: HTMLElement, options: VirtualTableOptio
     });
   }
 
-  body.addEventListener('scroll', scheduleDraw);
+  host.addEventListener('scroll', scheduleDraw);
   window.addEventListener('resize', scheduleDraw);
   draw();
 
@@ -172,7 +172,12 @@ export function renderVirtualTable(host: HTMLElement, options: VirtualTableOptio
       draw();
     },
     scrollToIndex: (index: number) => {
-      body.scrollTop = index * rowHeight;
+      // sizerはheader分の高さだけ下にあるが、sticky headerは通常の
+      // レイアウトフロー上ではheader自身の高さぶんスペースを占有し続ける
+      // ため、host.scrollTopは(headerの高さを足さずに)そのままindex*rowHeight
+      // でsizer内のその行を可視領域の先頭に合わせられる (draw()内のstart算出
+      // と同じ考え方)。
+      host.scrollTop = index * rowHeight;
       draw();
     },
   };

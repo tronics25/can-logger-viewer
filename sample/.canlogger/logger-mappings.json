@@ -1,0 +1,37 @@
+{
+  "profiles": [
+    {
+      "id": "profile-default",
+      "name": "Default Mapping",
+      "slots": {
+        "1": [
+          { "slot": 0, "itemId": "item-steer-speed" },
+          { "slot": 1, "itemId": "item-steer-angle" },
+          { "slot": 2, "itemId": "item-seat-x" },
+          { "slot": 3, "itemId": "item-seat-y" }
+        ],
+        "2": [
+          { "slot": 0, "itemId": "item-seat-z" }
+        ],
+        "3": [
+          { "slot": 0, "itemId": "item-rpm" },
+          { "slot": 1, "itemId": "item-gear" },
+          { "slot": 2, "itemId": "item-coolant-temp" }
+        ],
+        "4": [
+          { "slot": 0, "itemId": "item-pos-x" },
+          { "slot": 1, "itemId": "item-pos-y" },
+          { "slot": 2, "itemId": "item-pos-z" }
+        ],
+        "5": [
+          { "slot": 0, "itemId": "item-fuel" },
+          { "slot": 1, "itemId": "item-battery-voltage" }
+        ],
+        "6": [
+          { "slot": 0, "itemId": "item-seat-x-precise" },
+          { "slot": 2, "itemId": "item-outside-temp" }
+        ]
+      }
+    }
+  ]
+}

@@ -2,7 +2,7 @@
 import { ClampState } from '../models/types';
 import { clear, el, icon } from './common';
 import { CLAMP_MAX_COLOR, CLAMP_MIN_COLOR, fmtNum, fmtTime, timeGradientColor } from './chartUtils';
-import { LoggerColumn, LoggerRow } from './loggerRows';
+import { ChartColumn, ChartRow } from './loggerRows';
 
 const VB_W = 860;
 const VB_H = 420;
@@ -29,14 +29,14 @@ export function stopThreeDPlayback(): void {
   }
 }
 
-export function renderThreeDTab(container: HTMLElement, rows: LoggerRow[], columns: LoggerColumn[]): void {
-  const validIds = new Set(columns.map((c) => c.item.id));
+export function renderThreeDTab(container: HTMLElement, rows: ChartRow[], columns: ChartColumn[]): void {
+  const validIds = new Set(columns.map((c) => c.id));
   if (axisItemIds.x && !validIds.has(axisItemIds.x)) axisItemIds.x = null;
   if (axisItemIds.y && !validIds.has(axisItemIds.y)) axisItemIds.y = null;
   if (axisItemIds.z && !validIds.has(axisItemIds.z)) axisItemIds.z = null;
-  if (!axisItemIds.x && columns[0]) axisItemIds.x = columns[0].item.id;
-  if (!axisItemIds.y && columns[1]) axisItemIds.y = columns[1].item.id;
-  if (!axisItemIds.z && columns[2]) axisItemIds.z = columns[2].item.id;
+  if (!axisItemIds.x && columns[0]) axisItemIds.x = columns[0].id;
+  if (!axisItemIds.y && columns[1]) axisItemIds.y = columns[1].id;
+  if (!axisItemIds.z && columns[2]) axisItemIds.z = columns[2].id;
 
   const rerender = () => renderThreeDTab(container, rows, columns);
 
@@ -46,7 +46,7 @@ export function renderThreeDTab(container: HTMLElement, rows: LoggerRow[], colum
   container.appendChild(layout);
 }
 
-function buildAxisPanel(columns: LoggerColumn[], rerender: () => void): HTMLElement {
+function buildAxisPanel(columns: ChartColumn[], rerender: () => void): HTMLElement {
   const panel = el('div', { style: 'width:220px;flex:0 0 220px' });
   panel.appendChild(el('div', { class: 'sub', style: 'text-transform:uppercase;font-size:10.5px;margin:0 0 6px' }, ['座標設定']));
 
@@ -56,8 +56,8 @@ function buildAxisPanel(columns: LoggerColumn[], rerender: () => void): HTMLElem
     const select = el('select') as HTMLSelectElement;
     select.appendChild(el('option', { value: '' }, ['（未選択）']) as HTMLOptionElement);
     for (const col of columns) {
-      const opt = el('option', { value: col.item.id }, [`${col.item.name} (${col.item.unit})`]) as HTMLOptionElement;
-      if (col.item.id === axisItemIds[axis]) opt.selected = true;
+      const opt = el('option', { value: col.id }, [`${col.name} (${col.unit})`]) as HTMLOptionElement;
+      if (col.id === axisItemIds[axis]) opt.selected = true;
       select.appendChild(opt);
     }
     select.addEventListener('change', () => {
@@ -74,7 +74,7 @@ function buildAxisPanel(columns: LoggerColumn[], rerender: () => void): HTMLElem
   return panel;
 }
 
-function buildPlotArea(rows: LoggerRow[], columns: LoggerColumn[], rerender: () => void): HTMLElement {
+function buildPlotArea(rows: ChartRow[], columns: ChartColumn[], rerender: () => void): HTMLElement {
   const area = el('div', { style: 'flex:1;min-width:0' });
 
   if (!axisItemIds.x || !axisItemIds.y || !axisItemIds.z) {
@@ -103,9 +103,9 @@ function buildPlotArea(rows: LoggerRow[], columns: LoggerColumn[], rerender: () 
   ]);
   area.appendChild(toolbar);
 
-  const xItem = columns.find((c) => c.item.id === axisItemIds.x)!.item;
-  const yItem = columns.find((c) => c.item.id === axisItemIds.y)!.item;
-  const zItem = columns.find((c) => c.item.id === axisItemIds.z)!.item;
+  const xItem = columns.find((c) => c.id === axisItemIds.x)!;
+  const yItem = columns.find((c) => c.id === axisItemIds.y)!;
+  const zItem = columns.find((c) => c.id === axisItemIds.z)!;
   area.appendChild(
     el('div', { class: 'sub', style: 'margin-bottom:6px' }, [
       `X: ${xItem.name} (${xItem.unit})　Y: ${yItem.name} (${yItem.unit})　Z: ${zItem.name} (${zItem.unit})`,
@@ -127,7 +127,7 @@ function buildPlotArea(rows: LoggerRow[], columns: LoggerColumn[], rerender: () 
   return area;
 }
 
-function buildPoints(rows: LoggerRow[], xId: string, yId: string, zId: string): Point3D[] {
+function buildPoints(rows: ChartRow[], xId: string, yId: string, zId: string): Point3D[] {
   const pts: Point3D[] = [];
   for (const row of rows) {
     const dx = row.values.get(xId);

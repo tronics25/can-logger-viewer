@@ -5,7 +5,7 @@
       "name": "拡張機能を実行 (F5)",
       "type": "extensionHost",
       "request": "launch",
-      "args": ["--extensionDevelopmentPath=${workspaceFolder}", "${workspaceFolder}"],
+      "args": ["--extensionDevelopmentPath=${workspaceFolder}", "${workspaceFolder}/sample"],
       "outFiles": ["${workspaceFolder}/out/**/*.js"],
       "preLaunchTask": "npm: watch"
     }

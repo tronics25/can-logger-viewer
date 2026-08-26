@@ -1,9 +1,12 @@
-// サイドバー: Loggerマッピングプロファイル + Logger CAN ID設定への入口
+// サイドバー: Loggerマッピングプロファイル一覧。
+// Logger CAN ID設定へはこのビュー自体のタイトルバーの歯車アイコン
+// (canLogger.openLoggerCanIdSettings、package.jsonのview/title参照) から
+// 開けるため、リスト項目として重複して出す必要はない。
 import * as vscode from 'vscode';
 import { LoggerMappingProfile } from '../models/types';
 import { loadLoggerMappings, onDidChangeStore } from '../storage/workspaceStore';
 
-type Node = { kind: 'profile'; profile: LoggerMappingProfile } | { kind: 'settings' };
+type Node = { kind: 'profile'; profile: LoggerMappingProfile };
 
 export class MappingsProvider implements vscode.TreeDataProvider<Node> {
   private readonly _onDidChangeTreeData = new vscode.EventEmitter<Node | undefined | void>();
@@ -20,12 +23,6 @@ export class MappingsProvider implements vscode.TreeDataProvider<Node> {
   }
 
   getTreeItem(node: Node): vscode.TreeItem {
-    if (node.kind === 'settings') {
-      const ti = new vscode.TreeItem('Logger CAN ID設定 (1〜5)', vscode.TreeItemCollapsibleState.None);
-      ti.iconPath = new vscode.ThemeIcon('settings-gear');
-      ti.command = { command: 'canLogger.openLoggerCanIdSettings', title: 'Logger CAN ID設定' };
-      return ti;
-    }
     const ti = new vscode.TreeItem(node.profile.name, vscode.TreeItemCollapsibleState.None);
     ti.iconPath = new vscode.ThemeIcon('link');
     ti.contextValue = 'canLogger.mappingProfile';
@@ -40,7 +37,6 @@ export class MappingsProvider implements vscode.TreeDataProvider<Node> {
   getChildren(element?: Node): Node[] {
     if (element) return [];
     const data = loadLoggerMappings();
-    const profileNodes: Node[] = data.profiles.map((profile) => ({ kind: 'profile', profile }));
-    return [...profileNodes, { kind: 'settings' }];
+    return data.profiles.map((profile) => ({ kind: 'profile', profile }));
   }
 }

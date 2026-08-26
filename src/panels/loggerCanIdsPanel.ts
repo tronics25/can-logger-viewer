@@ -1,4 +1,4 @@
-// Logger CAN ID設定 (Logger 1〜5 ⇔ 実CAN ID) エディタ
+// Logger CAN ID設定 (Logger 1〜6 ⇔ 実CAN ID) エディタ
 import * as vscode from 'vscode';
 import { LoggerCanIdsFile } from '../models/types';
 import { loadLoggerCanIds, saveLoggerCanIds } from '../storage/workspaceStore';

@@ -1,4 +1,4 @@
-// Webview UI: Logger CAN ID設定 (Logger 1〜5 ⇔ 実CAN ID)
+// Webview UI: Logger CAN ID設定 (Logger 1〜6 ⇔ 実CAN ID)
 import { formatCanId, parseCanId } from '../decode/canId';
 import { CanIdRef, LoggerCanIdsFile, LoggerNumber } from '../models/types';
 import { clear, el, injectBaseStyles, vscodeApi } from './common';
@@ -17,7 +17,7 @@ function render(): void {
   r.append(
     el('h1', {}, ['Logger CAN ID設定']),
     el('div', { class: 'sub' }, [
-      'Logger 1〜5それぞれに割り当てる実際のCAN IDを設定します。表記例: 標準ID「181」、拡張ID「3B012400x」。',
+      'Logger 1〜6それぞれに割り当てる実際のCAN IDを設定します。表記例: 標準ID「181」、拡張ID「3B012400x」。',
     ])
   );
 
@@ -26,7 +26,7 @@ function render(): void {
   ]);
   const tbody = el('tbody');
 
-  for (let n = 1; n <= 5; n++) {
+  for (let n = 1; n <= 6; n++) {
     const loggerNumber = n as LoggerNumber;
     const assignment = state.assignments.find((a) => a.loggerNumber === loggerNumber);
     const current: CanIdRef = assignment?.canId ?? { id: 0x180 + n, extended: false };
