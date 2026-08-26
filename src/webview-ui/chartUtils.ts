@@ -20,6 +20,11 @@ export function fmtTime(t: number): string {
   return `${t.toFixed(3)}s`;
 }
 
+/** 単位が未設定(空文字)の項目では " (単位)" のような空カッコを表示しないための整形。 */
+export function unitSuffix(unit: string): string {
+  return unit ? ` (${unit})` : '';
+}
+
 /** 経過時間の割合(0〜1)から、青→紫→amberのグラデーション色を返す。 */
 export function timeGradientColor(frac: number): string {
   const stops: { t: number; c: [number, number, number] }[] = [

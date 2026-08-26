@@ -88,6 +88,22 @@ export class LogViewerEditorProvider implements vscode.CustomReadonlyEditorProvi
           fs.writeFileSync(uri.fsPath, msg.csv, 'utf-8');
           vscode.window.showInformationMessage(`CSVを書き出しました: ${uri.fsPath}`);
         }
+      } else if (msg.type === 'importCsv') {
+        // 時系列グラフでの比較用に、外部CSVを読み込んでwebviewへ渡す
+        // (パース自体はwebview側で行う。ここではファイル選択と読み込みのみ)。
+        const uris = await vscode.window.showOpenDialog({ filters: { CSV: ['csv'] }, canSelectMany: false });
+        if (uris && uris[0]) {
+          try {
+            const content = fs.readFileSync(uris[0].fsPath, 'utf-8');
+            webviewPanel.webview.postMessage({
+              type: 'csvFileLoaded',
+              fileName: uris[0].fsPath.split(/[/\\]/).pop(),
+              content,
+            });
+          } catch (e) {
+            vscode.window.showErrorMessage(`CSVの読み込みに失敗しました: ${(e as Error).message}`);
+          }
+        }
       }
     });
   }

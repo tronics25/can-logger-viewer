@@ -1,7 +1,8 @@
 // Webview UI: Loggerタブ - 時系列グラフ
 import { ClampState, DecodedValue } from '../models/types';
 import { clear, el } from './common';
-import { CLAMP_MAX_COLOR, CLAMP_MIN_COLOR, fmtNum, fmtTime, paletteColor } from './chartUtils';
+import { CLAMP_MAX_COLOR, CLAMP_MIN_COLOR, fmtNum, fmtTime, paletteColor, unitSuffix } from './chartUtils';
+import { buildCsvImportSection, getImportedChartData, mergeChartRows } from './csvImport';
 import { ChartColumn, ChartRow } from './loggerRows';
 
 const VB_W = 860;
@@ -26,7 +27,14 @@ const COLOR_PRESETS = [
   '#334155', '#a16207', '#15803d', '#9333ea',
 ];
 
-export function renderTimeSeriesTab(container: HTMLElement, rows: ChartRow[], columns: ChartColumn[]): void {
+export function renderTimeSeriesTab(container: HTMLElement, baseRows: ChartRow[], baseColumns: ChartColumn[]): void {
+  // 取り込み済みのCSVがあれば、Logger/固定フォーマットの系列と同じ時系列
+  // として混ぜ込む。以降はこのallColumns/allRowsだけを使い、呼び出し元の
+  // baseRows/baseColumnsを直接は参照しない。
+  const imported = getImportedChartData();
+  const columns = [...baseColumns, ...imported.columns];
+  const rows = mergeChartRows(baseRows, imported.rows);
+
   const validIds = new Set(columns.map((c) => c.id));
   for (const id of [...selectedItemIds]) if (!validIds.has(id)) selectedItemIds.delete(id);
 
@@ -38,7 +46,7 @@ export function renderTimeSeriesTab(container: HTMLElement, rows: ChartRow[], co
     if (zoomRange.tMax < fullTMin || zoomRange.tMin > fullTMax) zoomRange = null;
   }
 
-  const rerender = () => renderTimeSeriesTab(container, rows, columns);
+  const rerender = () => renderTimeSeriesTab(container, baseRows, baseColumns);
 
   const colorForItem = new Map<string, string>();
   columns.forEach((c, i) => colorForItem.set(c.id, colorOverrides.get(c.id) ?? paletteColor(i)));
@@ -121,6 +129,12 @@ function buildColorSwatchButton(itemId: string, currentColor: string, rerender: 
 function buildPicker(columns: ChartColumn[], colorForItem: Map<string, string>, rerender: () => void): HTMLElement {
   const wrap = el('div', { style: 'width:230px;flex:0 0 230px' });
 
+  // 別のデータソース(他のログ・実測値等)のCSVを、同じ時間軸のLogger/固定
+  // フォーマット信号と重ねて比較できるようにする。取り込んだ列はcolumns
+  // (呼び出し元でマージ済み)に混ざっているので、以降のグループ分け・
+  // チェックボックス・色選択は他の項目と完全に同じ処理で扱われる。
+  wrap.appendChild(buildCsvImportSection(rerender));
+
   const search = el('input', {
     type: 'text',
     value: pickerFilter,
@@ -134,7 +148,7 @@ function buildPicker(columns: ChartColumn[], colorForItem: Map<string, string>, 
   wrap.appendChild(search);
 
   if (columns.length === 0) {
-    wrap.appendChild(el('div', { class: 'sub' }, ['このプロファイルには項目が割り当てられていません。']));
+    wrap.appendChild(el('div', { class: 'sub' }, ['このプロファイルには項目が割り当てられていません。CSVを読み込んで比較することもできます。']));
     return wrap;
   }
 
@@ -245,7 +259,7 @@ function buildChartArea(
         el('span', {
           style: `display:inline-block;width:12px;height:3px;background:${colorForItem.get(col.id)};margin-right:5px;vertical-align:2px`,
         }),
-        `${col.name} (${col.unit})`,
+        `${col.name}${unitSuffix(col.unit)}`,
       ])
     );
   }
@@ -504,7 +518,7 @@ function attachHoverTooltip(
           el('span', {
             style: `display:inline-block;width:8px;height:8px;background:${colorForItem.get(col.id)};margin-right:5px;border-radius:2px`,
           }),
-          `${col.name}: ${d ? (d.clamp === 'nc' ? 'N.C.' : `${fmtNum(d.value)} ${col.unit}`) : '—'}`,
+          `${col.name}: ${d ? (d.clamp === 'nc' ? 'N.C.' : `${fmtNum(d.value)}${unitSuffix(col.unit)}`) : '—'}`,
         ])
       );
     }

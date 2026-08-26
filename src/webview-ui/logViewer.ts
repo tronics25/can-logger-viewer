@@ -260,7 +260,7 @@ function renderLoggerTab(container: HTMLElement): void {
     el('div', { class: 'segmented' }, [
       subtabButton('テーブル', 'table'),
       subtabButton('時系列グラフ', 'timeseries'),
-      subtabButton('3Dグラフ', '3d'),
+      subtabButton('軌跡グラフ', '3d'),
     ]),
   ]);
 
@@ -291,7 +291,7 @@ function renderLoggerTab(container: HTMLElement): void {
   if (activeLoggerSubTab === 'table') {
     renderLoggerTable(subContent, profile);
   } else if (activeLoggerSubTab === 'timeseries') {
-    // 時系列・3Dグラフでは、Logger項目に加えて固定フォーマットフレームの
+    // 時系列・軌跡グラフでは、Logger項目に加えて固定フォーマットフレームの
     // 信号も同じ時系列に混ぜて選択できるようにする。
     const { columns, rows } = buildChartData(profile, frames, loggerSpecs, loggerCanIds, fixedFormat);
     renderTimeSeriesTab(subContent, rows, columns);

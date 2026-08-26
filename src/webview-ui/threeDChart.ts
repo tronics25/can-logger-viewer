@@ -1,7 +1,8 @@
-// Webview UI: Loggerタブ - 3Dグラフ (X/Y/Z軌跡、ドラッグ回転・ホイールズーム・再生)
+// Webview UI: Loggerタブ - 軌跡グラフ (X/Y/Z軌跡、ドラッグ回転・ホイールズーム・再生)
+// Z軸を選択しなかった場合は、X/Yの2項目だけでXY平面上の2Dグラフとして表示する。
 import { ClampState } from '../models/types';
 import { clear, el, icon } from './common';
-import { CLAMP_MAX_COLOR, CLAMP_MIN_COLOR, fmtNum, fmtTime, timeGradientColor } from './chartUtils';
+import { CLAMP_MAX_COLOR, CLAMP_MIN_COLOR, fmtNum, fmtTime, timeGradientColor, unitSuffix } from './chartUtils';
 import { ChartColumn, ChartRow } from './loggerRows';
 
 const VB_W = 860;
@@ -16,7 +17,19 @@ interface Point3D {
   clamp: ClampState;
 }
 
+interface Point2D {
+  t: number;
+  x: number;
+  y: number;
+  clamp: ClampState;
+}
+
 let axisItemIds: { x: string | null; y: string | null; z: string | null } = { x: null, y: null, z: null };
+// Z軸をユーザーが一度でも明示的に操作した(未選択に戻した/別項目を選んだ)かどうか。
+// これがtrueになった後は、下の自動補完で「未選択のZ軸に3件目の項目を勝手に入れる」
+// 処理を行わない。そうしないと、ユーザーが2DグラフにしたくてZ軸を未選択に戻しても
+// 次の再描画で即座に3件目の項目が再選択され、2Dグラフに到達できなくなってしまう。
+let zUserTouched = false;
 let rotation = { azimuth: -0.6, elevation: 0.35 };
 let zoom = 1;
 let playbackT: number | null = null;
@@ -36,7 +49,7 @@ export function renderThreeDTab(container: HTMLElement, rows: ChartRow[], column
   if (axisItemIds.z && !validIds.has(axisItemIds.z)) axisItemIds.z = null;
   if (!axisItemIds.x && columns[0]) axisItemIds.x = columns[0].id;
   if (!axisItemIds.y && columns[1]) axisItemIds.y = columns[1].id;
-  if (!axisItemIds.z && columns[2]) axisItemIds.z = columns[2].id;
+  if (!axisItemIds.z && columns[2] && !zUserTouched) axisItemIds.z = columns[2].id;
 
   const rerender = () => renderThreeDTab(container, rows, columns);
 
@@ -56,20 +69,25 @@ function buildAxisPanel(columns: ChartColumn[], rerender: () => void): HTMLEleme
     const select = el('select') as HTMLSelectElement;
     select.appendChild(el('option', { value: '' }, ['（未選択）']) as HTMLOptionElement);
     for (const col of columns) {
-      const opt = el('option', { value: col.id }, [`${col.name} (${col.unit})`]) as HTMLOptionElement;
+      const opt = el('option', { value: col.id }, [`${col.name}${unitSuffix(col.unit)}`]) as HTMLOptionElement;
       if (col.id === axisItemIds[axis]) opt.selected = true;
       select.appendChild(opt);
     }
     select.addEventListener('change', () => {
       axisItemIds[axis] = select.value || null;
+      if (axis === 'z') zUserTouched = true;
       rerender();
     });
     row.appendChild(select);
     panel.appendChild(row);
   });
 
-  if (columns.length < 3) {
-    panel.appendChild(el('div', { class: 'sub' }, ['3軸ぶんの項目がこのプロファイルに割り当てられていません。']));
+  if (columns.length < 2) {
+    panel.appendChild(el('div', { class: 'sub' }, ['グラフ化できる項目がこのプロファイルに割り当てられていません。']));
+  } else {
+    panel.appendChild(
+      el('div', { class: 'sub' }, ['Z軸は任意です。未選択なら2Dグラフ、選択すると3Dグラフになります。'])
+    );
   }
   return panel;
 }
@@ -77,12 +95,38 @@ function buildAxisPanel(columns: ChartColumn[], rerender: () => void): HTMLEleme
 function buildPlotArea(rows: ChartRow[], columns: ChartColumn[], rerender: () => void): HTMLElement {
   const area = el('div', { style: 'flex:1;min-width:0' });
 
-  if (!axisItemIds.x || !axisItemIds.y || !axisItemIds.z) {
-    area.appendChild(el('div', { class: 'sub' }, ['X/Y/Zそれぞれに項目を選択してください。']));
+  const xId = axisItemIds.x;
+  const yId = axisItemIds.y;
+  const zId = axisItemIds.z;
+  if (!xId || !yId) {
+    area.appendChild(
+      el('div', { class: 'sub' }, ['X軸とY軸に項目を選択してください（Z軸は任意：選択すると3D表示になります）。'])
+    );
     return area;
   }
 
-  const points = buildPoints(rows.slice(-POINT_LIMIT), axisItemIds.x, axisItemIds.y, axisItemIds.z);
+  const xItem = columns.find((c) => c.id === xId)!;
+  const yItem = columns.find((c) => c.id === yId)!;
+  const zItem = zId ? columns.find((c) => c.id === zId) : undefined;
+
+  // Z軸が選ばれていなければ、X/Yの2項目だけでXY平面上の2Dグラフとして表示する。
+  return zItem
+    ? build3DPlot(area, rows, xId, yId, zId!, xItem, yItem, zItem, rerender)
+    : build2DPlot(area, rows, xId, yId, xItem, yItem, rerender);
+}
+
+function build3DPlot(
+  area: HTMLElement,
+  rows: ChartRow[],
+  xId: string,
+  yId: string,
+  zId: string,
+  xItem: ChartColumn,
+  yItem: ChartColumn,
+  zItem: ChartColumn,
+  rerender: () => void
+): HTMLElement {
+  const points = buildPoints(rows.slice(-POINT_LIMIT), xId, yId, zId);
   if (points.length < 2) {
     area.appendChild(el('div', { class: 'sub' }, ['軌跡を描画できるデータがありません（X/Y/Zが同時に得られる時刻が必要です）。']));
     return area;
@@ -103,12 +147,9 @@ function buildPlotArea(rows: ChartRow[], columns: ChartColumn[], rerender: () =>
   ]);
   area.appendChild(toolbar);
 
-  const xItem = columns.find((c) => c.id === axisItemIds.x)!;
-  const yItem = columns.find((c) => c.id === axisItemIds.y)!;
-  const zItem = columns.find((c) => c.id === axisItemIds.z)!;
   area.appendChild(
     el('div', { class: 'sub', style: 'margin-bottom:6px' }, [
-      `X: ${xItem.name} (${xItem.unit})　Y: ${yItem.name} (${yItem.unit})　Z: ${zItem.name} (${zItem.unit})`,
+      `X: ${xItem.name}${unitSuffix(xItem.unit)}　Y: ${yItem.name}${unitSuffix(yItem.unit)}　Z: ${zItem.name}${unitSuffix(zItem.unit)}`,
     ])
   );
 
@@ -122,6 +163,50 @@ function buildPlotArea(rows: ChartRow[], columns: ChartColumn[], rerender: () =>
 
   const svgEl = svgHost.querySelector('svg');
   if (svgEl) attachDragRotateAndZoom(svgEl, rerender);
+
+  area.appendChild(buildPlaybackBar(tMin, tMax, rerender));
+  return area;
+}
+
+function build2DPlot(
+  area: HTMLElement,
+  rows: ChartRow[],
+  xId: string,
+  yId: string,
+  xItem: ChartColumn,
+  yItem: ChartColumn,
+  rerender: () => void
+): HTMLElement {
+  const points = buildPoints2D(rows.slice(-POINT_LIMIT), xId, yId);
+  if (points.length < 2) {
+    area.appendChild(el('div', { class: 'sub' }, ['軌跡を描画できるデータがありません（X/Yが同時に得られる時刻が必要です）。']));
+    return area;
+  }
+
+  const tMin = points[0].t;
+  const tMax = points[points.length - 1].t;
+  if (playbackT === null || playbackT < tMin) playbackT = tMax;
+
+  area.appendChild(
+    el('div', { class: 'toolbar' }, [
+      el('span', { class: 'sub', style: 'margin:0' }, [
+        '項目が2つだけ選択されているため、XY平面上の軌跡として2D表示しています（時間経過で色が変化）',
+      ]),
+    ])
+  );
+  area.appendChild(
+    el('div', { class: 'sub', style: 'margin-bottom:6px' }, [
+      `X: ${xItem.name}${unitSuffix(xItem.unit)}　Y: ${yItem.name}${unitSuffix(yItem.unit)}`,
+    ])
+  );
+
+  const wrap = el('div', { style: 'position:relative;display:flex;gap:14px' });
+  const svgHost = el('div', { style: 'flex:1;min-width:0' });
+  const visiblePoints = points.filter((p) => p.t <= (playbackT as number));
+  svgHost.innerHTML = buildSvg2D(visiblePoints, points, xItem.name, yItem.name);
+  wrap.appendChild(svgHost);
+  wrap.appendChild(buildColorBar(tMin, tMax));
+  area.appendChild(wrap);
 
   area.appendChild(buildPlaybackBar(tMin, tMax, rerender));
   return area;
@@ -142,6 +227,19 @@ function buildPoints(rows: ChartRow[], xId: string, yId: string, zId: string): P
           ? 'min'
           : null;
     pts.push({ t: row.t, x: dx.value, y: dy.value, z: dz.value, clamp });
+  }
+  return pts;
+}
+
+function buildPoints2D(rows: ChartRow[], xId: string, yId: string): Point2D[] {
+  const pts: Point2D[] = [];
+  for (const row of rows) {
+    const dx = row.values.get(xId);
+    const dy = row.values.get(yId);
+    if (!dx || !dy) continue;
+    if (dx.clamp === 'nc' || dy.clamp === 'nc') continue;
+    const clamp: ClampState = dx.clamp === 'max' || dy.clamp === 'max' ? 'max' : dx.clamp === 'min' || dy.clamp === 'min' ? 'min' : null;
+    pts.push({ t: row.t, x: dx.value, y: dy.value, clamp });
   }
   return pts;
 }
@@ -225,6 +323,100 @@ function buildSvg(visible: Point3D[], all: Point3D[], xLabel: string, yLabel: st
   }
 
   return `<svg viewBox="0 0 ${VB_W} ${VB_H}" width="100%" height="380" style="display:block;cursor:grab">${body}</svg>`;
+}
+
+const MARGIN_2D = { left: 56, right: 20, top: 16, bottom: 30 };
+
+// Z軸未選択時のXY平面2Dグラフ。時系列グラフのグリッド/軸の描画パターンを踏襲しつつ、
+// 横軸も時間ではなく選択項目の値そのものになる点が異なる。
+function buildSvg2D(visible: Point2D[], all: Point2D[], xLabel: string, yLabel: string): string {
+  const plotW = VB_W - MARGIN_2D.left - MARGIN_2D.right;
+  const plotH = VB_H - MARGIN_2D.top - MARGIN_2D.bottom;
+  const xs = all.map((p) => p.x);
+  const ys = all.map((p) => p.y);
+  let xLo = Math.min(...xs);
+  let xHi = Math.max(...xs);
+  let yLo = Math.min(...ys);
+  let yHi = Math.max(...ys);
+  if (xLo === xHi) {
+    xLo -= 1;
+    xHi += 1;
+  }
+  if (yLo === yHi) {
+    yLo -= 1;
+    yHi += 1;
+  }
+  // X/Yを別々の値域で描画エリアいっぱいに引き伸ばすと、位置・軌跡データの場合に
+  // 円が楕円に見えるなど実際の形状が歪んで表示されてしまう。そのため縦横で
+  // 同じスケール(1単位=同じピクセル数)を使い、描画エリア中央に収まるように
+  // 余白を持たせて配置する(地図アプリの等縮尺表示と同じ考え方)。
+  const xMid = (xLo + xHi) / 2;
+  const yMid = (yLo + yHi) / 2;
+  const xSpan = (xHi - xLo) * 1.15;
+  const ySpan = (yHi - yLo) * 1.15;
+  const scale = Math.min(plotW / xSpan, plotH / ySpan);
+  const plotCx = MARGIN_2D.left + plotW / 2;
+  const plotCy = MARGIN_2D.top + plotH / 2;
+  const xOf = (v: number) => plotCx + (v - xMid) * scale;
+  const yOf = (v: number) => plotCy - (v - yMid) * scale;
+  // 目盛りに表示するのは元データの最小/最大ではなく、上のスケールで実際に
+  // 描画エリアの端に来る値(縦横どちらかは元データの範囲より広がっている)。
+  const visXLo = xMid - plotW / 2 / scale;
+  const visXHi = xMid + plotW / 2 / scale;
+  const visYLo = yMid - plotH / 2 / scale;
+  const visYHi = yMid + plotH / 2 / scale;
+
+  let body = '';
+  for (let i = 0; i <= 4; i++) {
+    const gy = MARGIN_2D.top + (plotH / 4) * i;
+    body += `<line x1="${MARGIN_2D.left}" y1="${gy}" x2="${VB_W - MARGIN_2D.right}" y2="${gy}" stroke="#e5e5e5" stroke-width="1"/>`;
+  }
+  for (let i = 0; i <= 4; i++) {
+    const gx = MARGIN_2D.left + (plotW / 4) * i;
+    body += `<line x1="${gx}" y1="${MARGIN_2D.top}" x2="${gx}" y2="${VB_H - MARGIN_2D.bottom}" stroke="#e5e5e5" stroke-width="1"/>`;
+  }
+  body += `<line x1="${MARGIN_2D.left}" y1="${MARGIN_2D.top}" x2="${MARGIN_2D.left}" y2="${VB_H - MARGIN_2D.bottom}" stroke="#c9c9c9"/>`;
+  body += `<line x1="${MARGIN_2D.left}" y1="${VB_H - MARGIN_2D.bottom}" x2="${VB_W - MARGIN_2D.right}" y2="${VB_H - MARGIN_2D.bottom}" stroke="#c9c9c9"/>`;
+
+  const tMin = all[0].t;
+  const tMax = all[all.length - 1].t;
+  const span = tMax - tMin || 1;
+
+  for (let i = 1; i < visible.length; i++) {
+    const p0 = { x: xOf(visible[i - 1].x), y: yOf(visible[i - 1].y) };
+    const p1 = { x: xOf(visible[i].x), y: yOf(visible[i].y) };
+    const frac = (visible[i].t - tMin) / span;
+    const color = timeGradientColor(frac);
+    body += `<line x1="${p0.x.toFixed(1)}" y1="${p0.y.toFixed(1)}" x2="${p1.x.toFixed(1)}" y2="${p1.y.toFixed(
+      1
+    )}" stroke="${color}" stroke-width="2.5" stroke-linecap="round"/>`;
+  }
+  for (const p of visible) {
+    if (!p.clamp) continue;
+    const color = p.clamp === 'max' ? CLAMP_MAX_COLOR : CLAMP_MIN_COLOR;
+    body += `<circle cx="${xOf(p.x).toFixed(1)}" cy="${yOf(p.y).toFixed(1)}" r="4" fill="none" stroke="${color}" stroke-width="2"/>`;
+  }
+  if (visible.length > 0) {
+    const last = visible[visible.length - 1];
+    body += `<circle cx="${xOf(last.x).toFixed(1)}" cy="${yOf(last.y).toFixed(1)}" r="5" fill="${timeGradientColor(
+      (last.t - tMin) / span
+    )}" stroke="#fff" stroke-width="1.5"/>`;
+  }
+
+  body += `<text x="${MARGIN_2D.left}" y="${VB_H - 8}" font-size="10" fill="#9a9a9a" font-family="ui-monospace,monospace">${fmtNum(visXLo)}</text>`;
+  body += `<text x="${VB_W - MARGIN_2D.right}" y="${VB_H - 8}" font-size="10" fill="#9a9a9a" text-anchor="end" font-family="ui-monospace,monospace">${fmtNum(visXHi)}</text>`;
+  body += `<text x="${MARGIN_2D.left - 4}" y="${MARGIN_2D.top + 9}" font-size="10" fill="#9a9a9a" text-anchor="end" font-family="ui-monospace,monospace">${fmtNum(visYHi)}</text>`;
+  body += `<text x="${MARGIN_2D.left - 4}" y="${VB_H - MARGIN_2D.bottom}" font-size="10" fill="#9a9a9a" text-anchor="end" font-family="ui-monospace,monospace">${fmtNum(visYLo)}</text>`;
+
+  const xCenter = MARGIN_2D.left + plotW / 2;
+  const yCenter = MARGIN_2D.top + plotH / 2;
+  body += `<text x="${xCenter}" y="${VB_H - 8}" font-size="11" fill="#6e6e6e" text-anchor="middle" font-family="ui-monospace,monospace">${escapeXml(xLabel)}</text>`;
+  body += `<text x="13" y="${yCenter}" font-size="11" fill="#6e6e6e" text-anchor="middle" font-family="ui-monospace,monospace" transform="rotate(-90 13 ${yCenter})">${escapeXml(yLabel)}</text>`;
+
+  // preserveAspectRatio指定なし(既定のxMidYMid meet)にして、上で計算した等縮尺の
+  // 座標をそのまま保つ。ここで"none"にして実際の描画枠いっぱいに引き伸ばすと、
+  // せっかく縦横同スケールで計算した位置関係がまた歪んでしまう。
+  return `<svg viewBox="0 0 ${VB_W} ${VB_H}" width="100%" height="380" style="display:block">${body}</svg>`;
 }
 
 function axisLine(from: { x: number; y: number }, to: { x: number; y: number }, color: string, label: string): string {
