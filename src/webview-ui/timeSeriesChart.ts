@@ -53,11 +53,30 @@ export function renderTimeSeriesTab(container: HTMLElement, baseRows: ChartRow[]
 
   clear(container);
   const layout = el('div', { style: 'display:flex;gap:18px;align-items:flex-start' });
-  layout.append(
-    buildPicker(columns, colorForItem, rerender),
-    buildChartArea(rows.slice(-ROW_LIMIT), columns, colorForItem, rerender)
-  );
+  // ROW_LIMITによる間引きはここではなく、ズーム範囲を確定させたbuildChartArea内
+  // (ズーム済みの表示範囲に対して)で行う。ここで先に末尾ROW_LIMIT件へ切り詰めて
+  // しまうと、ログ全体が長い場合にログ前半が最初から失われ、「ズームリセット」を
+  // 押しても真の先頭まで戻れなくなってしまう(実際に報告されたバグ)。
+  layout.append(buildPicker(columns, colorForItem, rerender), buildChartArea(rows, columns, colorForItem, rerender));
   container.appendChild(layout);
+}
+
+/**
+ * SVGの折れ線・マーカーが過剰に重くならないよう、必要な場合だけ等間隔に間引く。
+ * 先頭・末尾の点は必ず保持する(tMin/tMaxの計算やズーム境界がズレないように)。
+ * ズーム範囲確定後の「実際に表示する行」に対してのみ適用することで、ログ全体の
+ * 長さに関わらず先頭が欠落することはない。
+ */
+function downsampleRows(rows: ChartRow[], limit: number): ChartRow[] {
+  if (rows.length <= limit) return rows;
+  const step = rows.length / limit;
+  const out: ChartRow[] = [];
+  for (let i = 0; i < limit; i++) {
+    out.push(rows[Math.floor(i * step)]);
+  }
+  const last = rows[rows.length - 1];
+  if (out[out.length - 1] !== last) out.push(last);
+  return out;
 }
 
 /**
@@ -280,7 +299,10 @@ function buildChartArea(
     return area;
   }
 
-  const { svg, tMin, tMax } = buildSvg(visibleRows, selectedCols, colorForItem, mode);
+  // 折れ線の描画だけ、必要なら間引く(ホバーのツールチップは間引き前のvisibleRows
+  // を使い、最も近い時刻の値を正確に拾えるようにする)。
+  const renderRows = downsampleRows(visibleRows, ROW_LIMIT);
+  const { svg, tMin, tMax } = buildSvg(renderRows, selectedCols, colorForItem, mode);
   const svgHost = el('div', { style: 'position:relative' });
   svgHost.innerHTML = svg;
   area.appendChild(svgHost);

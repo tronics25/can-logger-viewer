@@ -247,8 +247,21 @@ function setByteHighlight(signalId: string, on: boolean): void {
   }
 }
 
+// 列ごとの幅の割合。無指定だとブラウザの表自動レイアウトが各セルの実際の
+// 入力値の長さから幅を決めてしまい、「信号名は説明的で長め・単位は短め」
+// という実データの傾向のせいで単位欄が不当に広く・信号名欄が不当に狭く
+// なってしまっていた。table-layout:fixedと合わせて明示指定することで
+// 実データの値に左右されない一定の見た目にする。
+const SIGNAL_COL_WIDTHS = ['24%', '8%', '10%', '10%', '12%', '10%', '10%', '12%', '4%'];
+
 function buildSignalTable(): HTMLElement {
-  const table = el('table', {}, [
+  const colgroup = el(
+    'colgroup',
+    {},
+    SIGNAL_COL_WIDTHS.map((w) => el('col', { style: `width:${w}` }))
+  );
+  const table = el('table', { style: 'table-layout:fixed' }, [
+    colgroup,
     el('thead', {}, [
       el(
         'tr',

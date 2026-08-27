@@ -152,12 +152,8 @@ function renderRawTab(container: HTMLElement): void {
     button('CSVエクスポート', () => exportRawCsv(filtered), true),
   ]);
 
-  const legend = el('div', { class: 'sub', style: 'flex:0 0 auto' }, [
-    '信号名 値 単位 = 固定フォーマットフレーム登録済み（パース済み表示）　/　16進バイト列 = 未登録・またはLogger（Loggerタブで確認）　/　名称 = Logger CAN ID設定・固定フォーマットフレーム名から自動判定　/　DLC = ログ上のDLCコード値(16進、Classic CANは実バイト数と同じ)　/　Length = 実データ長(バイト)',
-  ]);
-
   clear(container);
-  container.append(toolbar, legend);
+  container.append(toolbar);
 
   if (warnings.length) {
     for (const w of warnings) container.appendChild(el('div', { class: 'warn', style: 'flex:0 0 auto' }, [w]));

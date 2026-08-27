@@ -126,7 +126,11 @@ function build3DPlot(
   zItem: ChartColumn,
   rerender: () => void
 ): HTMLElement {
-  const points = buildPoints(rows.slice(-POINT_LIMIT), xId, yId, zId);
+  // rows.slice(-POINT_LIMIT)で末尾だけに切り詰めると、ログ全体がPOINT_LIMITより
+  // 長い場合にログ前半の軌跡がまるごと表示されなくなってしまう(実際に報告された
+  // バグ)。全区間からbuildPointsした後で等間隔に間引くことで、点数は抑えつつ
+  // ログ全体の軌跡を表示する。
+  const points = downsamplePoints(buildPoints(rows, xId, yId, zId), POINT_LIMIT);
   if (points.length < 2) {
     area.appendChild(el('div', { class: 'sub' }, ['軌跡を描画できるデータがありません（X/Y/Zが同時に得られる時刻が必要です）。']));
     return area;
@@ -177,7 +181,7 @@ function build2DPlot(
   yItem: ChartColumn,
   rerender: () => void
 ): HTMLElement {
-  const points = buildPoints2D(rows.slice(-POINT_LIMIT), xId, yId);
+  const points = downsamplePoints(buildPoints2D(rows, xId, yId), POINT_LIMIT);
   if (points.length < 2) {
     area.appendChild(el('div', { class: 'sub' }, ['軌跡を描画できるデータがありません（X/Yが同時に得られる時刻が必要です）。']));
     return area;
@@ -242,6 +246,24 @@ function buildPoints2D(rows: ChartRow[], xId: string, yId: string): Point2D[] {
     pts.push({ t: row.t, x: dx.value, y: dy.value, clamp });
   }
   return pts;
+}
+
+/**
+ * 描画点数がPOINT_LIMITを超える場合のみ、等間隔に間引く。先頭・末尾の点は
+ * 必ず保持する。ログ全体からbuildPoints済みの配列に対して適用することで、
+ * 「末尾N件だけに切り詰める」場合と違い、ログ前半の軌跡も(間引かれつつ)
+ * 表示され続ける。
+ */
+function downsamplePoints<T>(points: T[], limit: number): T[] {
+  if (points.length <= limit) return points;
+  const step = points.length / limit;
+  const out: T[] = [];
+  for (let i = 0; i < limit; i++) {
+    out.push(points[Math.floor(i * step)]);
+  }
+  const last = points[points.length - 1];
+  if (out[out.length - 1] !== last) out.push(last);
+  return out;
 }
 
 function computeBounds(points: Point3D[]) {

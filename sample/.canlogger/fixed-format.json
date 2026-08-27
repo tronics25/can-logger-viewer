@@ -2,7 +2,10 @@
   "entries": [
     {
       "id": "ff-2a0",
-      "canId": { "id": 672, "extended": false },
+      "canId": {
+        "id": 672,
+        "extended": false
+      },
       "name": "車速センサーCAN",
       "frameLength": 64,
       "signals": [
@@ -43,7 +46,10 @@
     },
     {
       "id": "ff-300",
-      "canId": { "id": 768, "extended": false },
+      "canId": {
+        "id": 768,
+        "extended": false
+      },
       "name": "ブレーキシステムCAN",
       "frameLength": 8,
       "signals": [
@@ -73,7 +79,10 @@
     },
     {
       "id": "ff-310",
-      "canId": { "id": 784, "extended": false },
+      "canId": {
+        "id": 784,
+        "extended": false
+      },
       "name": "灯火系CAN",
       "frameLength": 8,
       "signals": [
