@@ -32,6 +32,15 @@ let activeLoggerSubTab: 'table' | 'timeseries' | '3d' = 'table';
 let rawFilterPattern = '';
 let selectedProfileId: string | null = null;
 
+/**
+ * 列境界のドラッグで手動リサイズした幅(ラベルごと、px)。生ログ/Loggerテーブル
+ * それぞれ別に持つ。フィルタ入力等で再描画されるたびにrenderVirtualTableへ
+ * そのまま渡すことで手動幅を保持し、Auto Fitボタンでクリアすれば実データに
+ * 合わせた自動計測幅に戻る。
+ */
+const rawColumnWidths = new Map<string, number>();
+const loggerColumnWidths = new Map<string, number>();
+
 function root(): HTMLElement {
   return document.getElementById('root')!;
 }
@@ -104,14 +113,15 @@ function buildContentCell(f: WireFrame): HTMLElement {
 }
 
 /**
- * 「生ログ」タブのCONTENT列幅。CAN IDごとに1件だけ代表フレームを実際に
+ * 「生ログ」タブのCONTENT/NAME列幅。CAN IDごとに1件だけ代表フレームを実際に
  * デコード/計測し、その中で最大のものに合わせる (全件を毎回計測すると
  * フィルタ入力のたびに重くなるため、CAN ID種別数だけで済むようにする)。
- * frames/fixedFormatが変わるたびにrecomputeRawContentWidth()で更新する。
+ * frames/fixedFormatが変わるたびにrecomputeRawColumnWidths()で更新する。
  */
 let rawContentColumnWidth = 320;
+let rawNameColumnWidth = 130;
 
-function recomputeRawContentWidth(): void {
+function recomputeRawColumnWidths(): void {
   const representative = new Map<string, WireFrame>();
   for (const f of frames) {
     const key = `${f.canId}:${f.extended}`;
@@ -120,8 +130,12 @@ function recomputeRawContentWidth(): void {
     // (未登録CAN IDの16進ダンプ幅はdlcに比例するため)
     if (!cur || f.dlc > cur.dlc) representative.set(key, f);
   }
-  const candidates = Array.from(representative.values()).map((f) => buildContentCell(f));
-  rawContentColumnWidth = measureMaxCellWidth(candidates, 320);
+  const reps = Array.from(representative.values());
+  rawContentColumnWidth = measureMaxCellWidth(reps.map((f) => buildContentCell(f)), 320);
+  rawNameColumnWidth = measureMaxCellWidth(
+    reps.map((f) => frameLabel(f)).filter((s) => s.length > 0),
+    130
+  );
 }
 
 function formatNumber(v: number): string {
@@ -149,6 +163,11 @@ function renderRawTab(container: HTMLElement): void {
     filterInput,
     badge,
     el('div', { class: 'spacer' }),
+    button('Auto Fit', () => {
+      // 手動リサイズをすべて解除し、実データに合わせた自動計測幅に戻す。
+      rawColumnWidths.clear();
+      renderRawTab(container);
+    }),
     button('CSVエクスポート', () => exportRawCsv(filtered), true),
   ]);
 
@@ -169,12 +188,14 @@ function renderRawTab(container: HTMLElement): void {
       { label: 'Time (s)', width: '90px' },
       { label: 'TX/RX', width: '56px' },
       { label: 'CAN ID', width: '110px' },
-      { label: 'NAME', width: '130px' },
+      { label: 'NAME', width: `${rawNameColumnWidth}px` },
       { label: 'Ch', width: '48px' },
       { label: 'DLC', width: '48px' },
       { label: 'Length', width: '64px' },
       { label: 'CONTENT', width: `${rawContentColumnWidth}px` },
     ],
+    columnWidthOverrides: rawColumnWidths,
+    onColumnResize: (label, w) => rawColumnWidths.set(label, w),
     rowCount: filtered.length,
     emptyMessage: '該当するフレームがありません。',
     renderRow: (i) => {
@@ -306,7 +327,20 @@ function renderLoggerTab(container: HTMLElement): void {
   }
 }
 
+/** 配列から最大maxCount件を等間隔に間引いて取り出す(先頭・末尾は必ず含む)。 */
+function sampleEvenly<T>(arr: T[], maxCount: number): T[] {
+  if (arr.length <= maxCount) return arr;
+  const step = arr.length / maxCount;
+  const out: T[] = [];
+  for (let i = 0; i < maxCount; i++) out.push(arr[Math.floor(i * step)]);
+  return out;
+}
+
 function renderLoggerTable(container: HTMLElement, profile: LoggerMappingProfile): void {
+  // Auto Fitボタンから自分自身を呼び直せるよう、呼び出しのたびに中身をクリア
+  // してから組み立てる(呼び出し元は毎回新規のcontainerを渡すため通常は
+  // no-opだが、Auto Fit時の再描画で内容が二重に積まれるのを防ぐ)。
+  clear(container);
   const columns = loggerColumnsFor(profile, loggerSpecs);
   const rows = buildLoggerRows(profile, frames, loggerSpecs, loggerCanIds);
 
@@ -314,6 +348,11 @@ function renderLoggerTable(container: HTMLElement, profile: LoggerMappingProfile
     el('div', { class: 'toolbar', style: 'flex:0 0 auto' }, [
       el('span', { class: 'tag' }, [`${rows.length} 件`]),
       el('div', { class: 'spacer' }),
+      button('Auto Fit', () => {
+        // 手動リサイズをすべて解除し、実データに合わせた自動計測幅に戻す。
+        loggerColumnWidths.clear();
+        renderLoggerTable(container, profile);
+      }),
       button('CSVエクスポート', () => exportLoggerCsv(columns, rows), true),
     ])
   );
@@ -326,12 +365,23 @@ function renderLoggerTable(container: HTMLElement, profile: LoggerMappingProfile
   const tableHost = el('div', { style: 'flex:1;min-height:0;margin-top:2px;' });
   container.appendChild(tableHost);
 
+  // 項目ごとに実際の値の表示幅を実測してデフォルト列幅にする(件数が多い場合は
+  // 間引いてサンプリングし、フィルタ操作等がない画面でも軽く済むようにする)。
+  const sampledRows = sampleEvenly(rows, 300);
+  const itemColumns = columns.map((c) => {
+    const label = `${c.item.name} (${c.item.unit})`;
+    const candidates: (Node | string)[] = [label];
+    for (const row of sampledRows) {
+      const d = row.values.get(c.item.id);
+      candidates.push(d ? clampCell(d) : '—');
+    }
+    return { label, width: `${measureMaxCellWidth(candidates, 150)}px` };
+  });
+
   renderVirtualTable(tableHost, {
-    columns: [
-      { label: 'Time (s)', width: '90px' },
-      { label: 'Logger', width: '64px' },
-      ...columns.map((c) => ({ label: `${c.item.name} (${c.item.unit})`, width: '150px' })),
-    ],
+    columns: [{ label: 'Time (s)', width: '90px' }, { label: 'Logger', width: '64px' }, ...itemColumns],
+    columnWidthOverrides: loggerColumnWidths,
+    onColumnResize: (label, w) => loggerColumnWidths.set(label, w),
     rowCount: rows.length,
     emptyMessage: 'このプロファイルで受信したデータがまだありません。',
     renderRow: (i) => {
@@ -434,14 +484,18 @@ window.addEventListener('message', (event) => {
     loggerCanIds = msg.loggerCanIds;
     loggerMappings = msg.loggerMappings;
     selectedProfileId = loggerMappings.profiles[0]?.id ?? null;
-    recomputeRawContentWidth();
+    // 新しいログファイルを開いた(=画面遷移)ときは、以前のファイルで手動
+    // リサイズした列幅を引き継がず、実データに合わせた自動計測幅からやり直す。
+    rawColumnWidths.clear();
+    loggerColumnWidths.clear();
+    recomputeRawColumnWidths();
     render();
   } else if (msg.type === 'registriesUpdated') {
     fixedFormat = msg.fixedFormat;
     loggerSpecs = msg.loggerSpecs;
     loggerCanIds = msg.loggerCanIds;
     loggerMappings = msg.loggerMappings;
-    recomputeRawContentWidth();
+    recomputeRawColumnWidths();
     render();
   }
 });

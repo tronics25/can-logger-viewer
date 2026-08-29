@@ -9,7 +9,7 @@ import {
   loggerItemsOverlap,
   occupiedDataNumbers,
 } from '../models/types';
-import { clear, el, icon, injectBaseStyles, lsbInput, vscodeApi } from './common';
+import { clear, el, icon, injectBaseStyles, lsbInput, makeTableColumnsResizable, measureMaxCellWidth, vscodeApi } from './common';
 
 const api = vscodeApi();
 let state: LoggerSpecsFile = { categories: [], items: [] };
@@ -47,6 +47,11 @@ function render(): void {
   const toolbar = el('div', { class: 'toolbar' }, [
     button('+ 分類を追加', () => api.postMessage({ type: 'newCategory' }), true),
     el('div', { class: 'spacer' }),
+    button('Auto Fit', () => {
+      // 手動リサイズをすべて解除し、実データに合わせた自動計測幅に戻す。
+      itemColWidths = null;
+      render();
+    }),
     button('JSONインポート', () => api.postMessage({ type: 'import' })),
     button('JSONエクスポート', () => api.postMessage({ type: 'export' })),
   ]);
@@ -59,17 +64,47 @@ function render(): void {
     ]),
   ]);
 
-  const table = el('table', {}, [buildThead(), buildTbody()]);
+  if (!itemColWidths) itemColWidths = measureItemColWidths(state.items);
+  const colgroup = el(
+    'colgroup',
+    {},
+    itemColWidths.map((w) => el('col', { style: `width:${w}px` }))
+  );
+  const table = el('table', { style: 'table-layout:fixed' }, [colgroup, buildThead(), buildTbody()]);
+  makeTableColumnsResizable(table, itemColWidths);
 
   r.append(header, toolbar, table);
 }
 
+const ITEM_COL_LABELS = ['データ名称', 'データ番号', 'データ長', '単位', 'オフセット', 'Lsb', 'Max', 'Min', 'エンディアン', ''];
+
+/**
+ * 各列の実幅(px)。列境界のドラッグでこの配列を直接書き換えることで、
+ * 再描画をまたいで手動リサイズを保持する。nullのままなら次のrender()で
+ * 実データに合わせた自動計測幅を算出する(Auto Fitボタンでもnullに戻す)。
+ */
+let itemColWidths: number[] | null = null;
+
+/** 項目テーブルの列幅を、ヘッダーラベルと実際の値の表示幅から自動計測する。 */
+function measureItemColWidths(items: LoggerItemSpec[]): number[] {
+  const col = (i: number, extra: (Node | string)[], fallback: number) =>
+    measureMaxCellWidth([ITEM_COL_LABELS[i], ...extra], fallback);
+  return [
+    col(0, items.map((i) => i.name), 140),
+    130, // データ番号(分類セレクト+ダッシュ+データ番号入力の複合セル)
+    170, // データ長(セレクト+UINT32時の"→ 4~5"バッジの複合セル)
+    col(3, items.map((i) => i.unit), 70),
+    col(4, items.map((i) => String(i.offset)), 90),
+    col(5, items.map((i) => i.lsbText ?? i.lsb.toString()), 100),
+    col(6, items.map((i) => String(i.max)), 90),
+    col(7, items.map((i) => String(i.min)), 90),
+    100, // エンディアン(セレクト)
+    36, // 削除ボタン
+  ];
+}
+
 function buildThead(): HTMLElement {
-  return el('thead', {}, [
-    el('tr', {}, [
-      'データ名称', 'データ番号', 'データ長', '単位', 'オフセット', 'Lsb', 'Max', 'Min', 'エンディアン', '',
-    ].map((t) => el('th', {}, [t]))),
-  ]);
+  return el('thead', {}, [el('tr', {}, ITEM_COL_LABELS.map((t) => el('th', {}, [t])))]);
 }
 
 function buildTbody(): HTMLElement {
@@ -138,7 +173,8 @@ function buildGroupRow(category: LoggerCategory): HTMLElement {
 
   const nameInput = el('input', { type: 'text', value: category.name, style: 'font-weight:600;max-width:220px' }) as HTMLInputElement;
   nameInput.addEventListener('change', () => {
-    category.name = nameInput.value;
+    // 前後の空白が付いたままだと気づきにくい形でグラフの見出し等に影響するため確定時に除く
+    category.name = nameInput.value.trim();
     save();
   });
   const count = state.items.filter((i) => i.categoryNumber === category.number).length;
@@ -180,7 +216,9 @@ function numberInput(value: number, onChange: (v: number) => void, width = ''): 
 function textInput(value: string, onChange: (v: string) => void, mono = false): HTMLInputElement {
   const input = el('input', { type: 'text', value, class: mono ? 'mono' : '' }) as HTMLInputElement;
   input.addEventListener('change', () => {
-    onChange(input.value);
+    // 前後の空白(半角・全角とも)が付いたままだと見た目には気づきにくいまま
+    // Auto Fitの列幅計算に影響してしまうため、確定時に取り除く。
+    onChange(input.value.trim());
     save();
   });
   return input;
@@ -257,7 +295,17 @@ function buildItemRow(item: LoggerItemSpec, isDupe: boolean): HTMLElement {
     ]),
     el('td', {}, [textInput(item.unit, (v) => (item.unit = v))]),
     el('td', {}, [numberInput(item.offset, (v) => (item.offset = v))]),
-    el('td', {}, [lsbInput(item.lsb, (v) => (item.lsb = v), save)]),
+    el('td', {}, [
+      lsbInput(
+        item.lsb,
+        item.lsbText,
+        (v, t) => {
+          item.lsb = v;
+          item.lsbText = t;
+        },
+        save
+      ),
+    ]),
     el('td', {}, [numberInput(item.max, (v) => (item.max = v))]),
     el('td', {}, [numberInput(item.min, (v) => (item.min = v))]),
     el('td', {}, [endianSelect]),
@@ -304,6 +352,11 @@ window.addEventListener('message', (event) => {
   const msg = event.data;
   if (msg.type === 'init') {
     state = msg.data as LoggerSpecsFile;
+    // render()はスクリプト読み込み直後にも一度(この非同期initが届く前、
+    // state={categories:[],items:[]}のまま)呼ばれるため、そこでitemColWidths
+    // が「データ無しの幅」のまま確定してしまわないよう、実データが届いた時点で
+    // 必ず明示的に測り直す。
+    itemColWidths = measureItemColWidths(state.items);
     render();
   }
 });

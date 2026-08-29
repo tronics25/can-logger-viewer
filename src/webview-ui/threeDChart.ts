@@ -5,8 +5,10 @@ import { clear, el, icon } from './common';
 import { CLAMP_MAX_COLOR, CLAMP_MIN_COLOR, fmtNum, fmtTime, timeGradientColor, unitSuffix } from './chartUtils';
 import { ChartColumn, ChartRow } from './loggerRows';
 
-const VB_W = 860;
-const VB_H = 420;
+// 以前は860x420(横長)だったが、3Dビューをズームすると縦方向が先に見切れて
+// しまっていたため正方形寄りに変更した。
+const VB_W = 680;
+const VB_H = 680;
 const POINT_LIMIT = 4000;
 
 interface Point3D {
@@ -25,13 +27,27 @@ interface Point2D {
 }
 
 let axisItemIds: { x: string | null; y: string | null; z: string | null } = { x: null, y: null, z: null };
+// 軸ごとの符号反転。IMU等は座標系の流儀によって軸の向き(例: Y軸がLEFT to RIGHT
+// か、その逆のRIGHT to LEFTか)が実装によって異なることがある。回転(視点変更)は
+// 空間の向き(掌性)を保つ変換なので、軸1本だけが逆向きという食い違いは回転だけ
+// では絶対に直せない(鏡映が必要)。そのため軸ごとに符号を反転できるようにする。
+let axisFlip: { x: boolean; y: boolean; z: boolean } = { x: false, y: false, z: false };
 // Z軸をユーザーが一度でも明示的に操作した(未選択に戻した/別項目を選んだ)かどうか。
 // これがtrueになった後は、下の自動補完で「未選択のZ軸に3件目の項目を勝手に入れる」
 // 処理を行わない。そうしないと、ユーザーが2DグラフにしたくてZ軸を未選択に戻しても
 // 次の再描画で即座に3件目の項目が再選択され、2Dグラフに到達できなくなってしまう。
 let zUserTouched = false;
-let rotation = { azimuth: -0.6, elevation: 0.35 };
+// 初期視点: X/Y/Z軸(単位ベクトル)を投影した3つの端点を結ぶとちょうど正三角形に
+// なる角度。azimuth=135°、elevation=arcsin(1/√3)(≈35.26°、いわゆる
+// アイソメトリック投影の仰角)。この角度では正三角形の重心(=外接円の中心、
+// 正三角形なので一致する)がちょうど投影後の原点と一致するため、原点をビュー
+// 中心にするだけで軸の見え方も左右対称になり、ズーム時にどこか一方向だけが
+// 先に見切れるということが起きにくくなる。
+const DEFAULT_ROTATION = { azimuth: (3 * Math.PI) / 4, elevation: Math.asin(1 / Math.sqrt(3)) };
+let rotation = { ...DEFAULT_ROTATION };
 let zoom = 1;
+/** マウス中央ボタンのドラッグでのパン(視点そのものの平行移動)。viewBox px単位。 */
+let panOffset = { x: 0, y: 0 };
 let playbackT: number | null = null;
 let playTimer: number | null = null;
 
@@ -66,7 +82,8 @@ function buildAxisPanel(columns: ChartColumn[], rerender: () => void): HTMLEleme
   (['x', 'y', 'z'] as const).forEach((axis) => {
     const row = el('div', { style: 'margin-bottom:8px' });
     row.appendChild(el('label', { style: 'display:block;font-size:11px;margin-bottom:2px' }, [`${axis.toUpperCase()}軸`]));
-    const select = el('select') as HTMLSelectElement;
+    const selectRow = el('div', { style: 'display:flex;gap:6px;align-items:center' });
+    const select = el('select', { style: 'flex:1;min-width:0' }) as HTMLSelectElement;
     select.appendChild(el('option', { value: '' }, ['（未選択）']) as HTMLOptionElement);
     for (const col of columns) {
       const opt = el('option', { value: col.id }, [`${col.name}${unitSuffix(col.unit)}`]) as HTMLOptionElement;
@@ -78,15 +95,30 @@ function buildAxisPanel(columns: ChartColumn[], rerender: () => void): HTMLEleme
       if (axis === 'z') zUserTouched = true;
       rerender();
     });
-    row.appendChild(select);
+    const flipLabel = el('label', {
+      style: 'display:flex;align-items:center;gap:2px;font-size:10.5px;white-space:nowrap;cursor:pointer',
+      title: 'この軸の正負を反転する(座標系の流儀の食い違いを補正する用)',
+    });
+    const flipCheckbox = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    flipCheckbox.checked = axisFlip[axis];
+    flipCheckbox.addEventListener('change', () => {
+      axisFlip[axis] = flipCheckbox.checked;
+      rerender();
+    });
+    flipLabel.append(flipCheckbox, '反転');
+    selectRow.append(select, flipLabel);
+    row.appendChild(selectRow);
     panel.appendChild(row);
   });
 
   if (columns.length < 2) {
     panel.appendChild(el('div', { class: 'sub' }, ['グラフ化できる項目がこのプロファイルに割り当てられていません。']));
   } else {
-    panel.appendChild(
-      el('div', { class: 'sub' }, ['Z軸は任意です。未選択なら2Dグラフ、選択すると3Dグラフになります。'])
+    panel.append(
+      el('div', { class: 'sub' }, ['Z軸は任意です。未選択なら2Dグラフ、選択すると3Dグラフになります。']),
+      el('div', { class: 'sub' }, [
+        '「反転」は座標系の流儀の食い違い(例: IMUの実装によってY軸の正方向がLEFTだったりRIGHTだったりする)を補正するためのものです。回転(視点変更)だけでは1軸だけの向き違い(鏡映)は直せないため、該当する軸で反転を使ってください。',
+      ])
     );
   }
   return panel;
@@ -141,11 +173,12 @@ function build3DPlot(
   if (playbackT === null || playbackT < tMin) playbackT = tMax;
 
   const toolbar = el('div', { class: 'toolbar' }, [
-    el('span', { class: 'sub', style: 'margin:0' }, ['ドラッグで回転・ホイールでズーム']),
+    el('span', { class: 'sub', style: 'margin:0' }, ['ドラッグで回転・中央ボタンドラッグでパン・ホイールでズーム']),
     el('div', { class: 'spacer' }),
     button('視点リセット', () => {
-      rotation = { azimuth: -0.6, elevation: 0.35 };
+      rotation = { ...DEFAULT_ROTATION };
       zoom = 1;
+      panOffset = { x: 0, y: 0 };
       rerender();
     }),
   ]);
@@ -230,7 +263,13 @@ function buildPoints(rows: ChartRow[], xId: string, yId: string, zId: string): P
         : dx.clamp === 'min' || dy.clamp === 'min' || dz.clamp === 'min'
           ? 'min'
           : null;
-    pts.push({ t: row.t, x: dx.value, y: dy.value, z: dz.value, clamp });
+    pts.push({
+      t: row.t,
+      x: axisFlip.x ? -dx.value : dx.value,
+      y: axisFlip.y ? -dy.value : dy.value,
+      z: axisFlip.z ? -dz.value : dz.value,
+      clamp,
+    });
   }
   return pts;
 }
@@ -243,7 +282,7 @@ function buildPoints2D(rows: ChartRow[], xId: string, yId: string): Point2D[] {
     if (!dx || !dy) continue;
     if (dx.clamp === 'nc' || dy.clamp === 'nc') continue;
     const clamp: ClampState = dx.clamp === 'max' || dy.clamp === 'max' ? 'max' : dx.clamp === 'min' || dy.clamp === 'min' ? 'min' : null;
-    pts.push({ t: row.t, x: dx.value, y: dy.value, clamp });
+    pts.push({ t: row.t, x: axisFlip.x ? -dx.value : dx.value, y: axisFlip.y ? -dy.value : dy.value, clamp });
   }
   return pts;
 }
@@ -272,13 +311,23 @@ function computeBounds(points: Point3D[]) {
   const zs = points.map((p) => p.z);
   const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
   const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
-  const cz = (Math.min(...zs) + Math.max(...zs)) / 2;
-  const span = Math.max(
-    Math.max(...xs) - Math.min(...xs),
-    Math.max(...ys) - Math.min(...ys),
-    Math.max(...zs) - Math.min(...zs),
-    1e-6
-  );
+  const zMin = Math.min(...zs);
+  const zMax = Math.max(...zs);
+  const span = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), zMax - zMin, 1e-6);
+
+  // Z軸は「原点(0) = 基準面(地面等)からの高さ」を表す用途(IMU座標等)を
+  // 主眼としており、データの中心ではなく原点をやや下寄りに配置したい
+  // (実データがわずかにマイナスZになる場合の余白は残しつつ、X/Y軸側に
+  // 余裕がある=Z軸の実際の値域がspanより小さいぶんを高さ方向の表示スペース
+  // として実データ側に多く使うため)。
+  // 実データは絶対に描画範囲外にしないよう、確保できる下余白はX/Y軸由来の
+  // 余裕の範囲内に収める(Z軸の値域がspanと同じ=余裕が無ければ、原点ちょうど
+  // を下端にした詰めた表示にフォールバックする)。
+  const zMargin = span * 0.08;
+  let zLow = Math.min(-zMargin, zMin);
+  zLow = Math.max(zLow, zMax - span);
+  const cz = zLow + span / 2;
+
   return { cx, cy, cz, span };
 }
 
@@ -302,7 +351,7 @@ function project(
   const sinE = Math.sin(elevation);
   const z2 = x1 * sinE + z1 * cosE; // 上下 -> 画面縦方向
   const scale = 150 * zoom;
-  return { x: VB_W / 2 + y1 * scale, y: VB_H / 2 - z2 * scale };
+  return { x: VB_W / 2 + y1 * scale + panOffset.x, y: VB_H / 2 - z2 * scale + panOffset.y };
 }
 
 function buildSvg(visible: Point3D[], all: Point3D[], xLabel: string, yLabel: string, zLabel: string): string {
@@ -344,7 +393,7 @@ function buildSvg(visible: Point3D[], all: Point3D[], xLabel: string, yLabel: st
     )}" stroke="#fff" stroke-width="1.5"/>`;
   }
 
-  return `<svg viewBox="0 0 ${VB_W} ${VB_H}" width="100%" height="380" style="display:block;cursor:grab">${body}</svg>`;
+  return `<svg viewBox="0 0 ${VB_W} ${VB_H}" width="100%" height="520" style="display:block;cursor:grab">${body}</svg>`;
 }
 
 const MARGIN_2D = { left: 56, right: 20, top: 16, bottom: 30 };
@@ -438,7 +487,7 @@ function buildSvg2D(visible: Point2D[], all: Point2D[], xLabel: string, yLabel: 
   // preserveAspectRatio指定なし(既定のxMidYMid meet)にして、上で計算した等縮尺の
   // 座標をそのまま保つ。ここで"none"にして実際の描画枠いっぱいに引き伸ばすと、
   // せっかく縦横同スケールで計算した位置関係がまた歪んでしまう。
-  return `<svg viewBox="0 0 ${VB_W} ${VB_H}" width="100%" height="380" style="display:block">${body}</svg>`;
+  return `<svg viewBox="0 0 ${VB_W} ${VB_H}" width="100%" height="520" style="display:block">${body}</svg>`;
 }
 
 function axisLine(from: { x: number; y: number }, to: { x: number; y: number }, color: string, label: string): string {
@@ -453,14 +502,22 @@ function escapeXml(s: string): string {
 }
 
 function buildColorBar(tMin: number, tMax: number): HTMLElement {
+  // 色見本(グラデーションバー)と秒数ラベルは、上端=tMax・下端=tMinが同じ
+  // 高さで揃って初めて目盛りとして機能する。以前は2つを別々の縦積みブロック
+  // にしていたため、ラベルが色見本の下に丸ごとズレて対応が取れていなかった。
+  // 同じ高さの行(display:flex)の中に並べ、両方ともjustify-content:space-between
+  // で上端/中央/下端の3点を揃える。
   const grad = `linear-gradient(to bottom, ${timeGradientColor(1)}, ${timeGradientColor(0.5)}, ${timeGradientColor(0)})`;
-  return el('div', { style: 'display:flex;flex-direction:column;align-items:center;gap:6px;flex:0 0 60px' }, [
+  const BAR_HEIGHT = 340;
+  return el('div', { style: 'display:flex;flex-direction:column;align-items:flex-start;gap:6px;flex:0 0 90px' }, [
     el('div', { class: 'sub', style: 'margin:0;font-size:10px' }, ['経過時間']),
-    el('div', { style: `width:14px;height:220px;border-radius:3px;background:${grad}` }),
-    el('div', { style: 'display:flex;flex-direction:column;justify-content:space-between;height:220px;font-size:9px' }, [
-      el('span', { class: 'mono sub', style: 'margin:0' }, [fmtTime(tMax)]),
-      el('span', { class: 'mono sub', style: 'margin:0' }, [fmtTime((tMin + tMax) / 2)]),
-      el('span', { class: 'mono sub', style: 'margin:0' }, [fmtTime(tMin)]),
+    el('div', { style: `display:flex;gap:6px;height:${BAR_HEIGHT}px` }, [
+      el('div', { style: `width:14px;border-radius:3px;background:${grad}` }),
+      el('div', { style: 'display:flex;flex-direction:column;justify-content:space-between;font-size:9px' }, [
+        el('span', { class: 'mono sub', style: 'margin:0' }, [fmtTime(tMax)]),
+        el('span', { class: 'mono sub', style: 'margin:0' }, [fmtTime((tMin + tMax) / 2)]),
+        el('span', { class: 'mono sub', style: 'margin:0' }, [fmtTime(tMin)]),
+      ]),
     ]),
   ]);
 }
@@ -504,7 +561,17 @@ function buildPlaybackBar(tMin: number, tMax: number, rerender: () => void): HTM
     rerender();
   });
 
-  const readout = el('span', { class: 'mono' }, [`${fmtNum(playbackT ?? tMax, 3)}s / ${fmtNum(tMax, 3)}s`]);
+  // 再生時間の文字数(桁数)は再生が進むにつれて変わる(例: "3s"→"12.5s")ため、
+  // 幅を固定しないとシークバー(flex:1)がそのぶん伸縮して振動して見えてしまう。
+  // tMaxの桁数から最大幅を計算し、固定幅+右寄せで表示することでシークバーの
+  // 幅を一定に保つ。
+  const intDigits = Math.max(1, Math.floor(Math.max(Math.abs(tMin), Math.abs(tMax))).toString().length);
+  const readoutWidthCh = intDigits * 2 + 13; // "X.XXXs / Y.XXXs" 相当の最大幅見積り
+  const readout = el(
+    'span',
+    { class: 'mono', style: `display:inline-block;flex:0 0 auto;width:${readoutWidthCh}ch;text-align:right` },
+    [`${fmtNum(playbackT ?? tMax, 3)}s / ${fmtNum(tMax, 3)}s`]
+  );
 
   bar.append(playBtn, slider, readout);
   return bar;
@@ -518,6 +585,16 @@ let dragStartX = 0;
 let dragStartY = 0;
 let dragStartAzimuth = 0;
 let dragStartElevation = 0;
+// 中央ボタンドラッグでのパン用の状態。回転(dragging)とは独立に管理する。
+let panning = false;
+let panStartX = 0;
+let panStartY = 0;
+let panStartOffset = { x: 0, y: 0 };
+// 画面px→viewBox px換算率。パン開始時のSVG実描画サイズから求める
+// (preserveAspectRatio既定のletterboxを厳密には考慮しないが、ドラッグの
+// 感覚が合えば十分なため簡易的な比率で良い)。
+let panScaleX = 1;
+let panScaleY = 1;
 let activeRerender: (() => void) | null = null;
 let rafPending = false;
 
@@ -531,23 +608,48 @@ function scheduleRerender(): void {
 }
 
 window.addEventListener('mousemove', (ev) => {
-  if (!dragging) return;
-  const dx = ev.clientX - dragStartX;
-  const dy = ev.clientY - dragStartY;
-  rotation = {
-    azimuth: dragStartAzimuth + dx * 0.01,
-    elevation: Math.max(-1.5, Math.min(1.5, dragStartElevation - dy * 0.01)),
-  };
-  scheduleRerender();
+  if (dragging) {
+    const dx = ev.clientX - dragStartX;
+    const dy = ev.clientY - dragStartY;
+    // azimuth・elevationとも角度に上限/下限を設けない(sin/cosは全域で自然に
+    // 扱えるため)。以前はelevationを±1.5rad(≈86°)に制限していたが、それだと
+    // 真上/真下や、そこを越えて回り込む向きまで自由に見られず「完全に自由に
+    // 回転できない」という不具合になっていたため撤廃した。
+    rotation = {
+      azimuth: dragStartAzimuth + dx * 0.01,
+      elevation: dragStartElevation - dy * 0.01,
+    };
+    scheduleRerender();
+  } else if (panning) {
+    const dx = ev.clientX - panStartX;
+    const dy = ev.clientY - panStartY;
+    panOffset = { x: panStartOffset.x + dx * panScaleX, y: panStartOffset.y + dy * panScaleY };
+    scheduleRerender();
+  }
 });
 window.addEventListener('mouseup', () => {
   dragging = false;
+  panning = false;
 });
 
 function attachDragRotateAndZoom(svgEl: SVGElement, rerender: () => void): void {
   activeRerender = rerender;
   svgEl.addEventListener('mousedown', (ev) => {
     const mouseEv = ev as MouseEvent;
+    if (mouseEv.button === 1) {
+      // マウス中央ボタン: 視点そのものをドラッグした分だけ平行移動するパン
+      // (Blender等の3Dビューアの慣習に合わせる)。ブラウザ既定の中央クリック
+      // オートスクロールを止めるためpreventDefaultする。
+      mouseEv.preventDefault();
+      panning = true;
+      panStartX = mouseEv.clientX;
+      panStartY = mouseEv.clientY;
+      panStartOffset = { ...panOffset };
+      const rect = svgEl.getBoundingClientRect();
+      panScaleX = VB_W / (rect.width || VB_W);
+      panScaleY = VB_H / (rect.height || VB_H);
+      return;
+    }
     dragging = true;
     dragStartX = mouseEv.clientX;
     dragStartY = mouseEv.clientY;

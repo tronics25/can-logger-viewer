@@ -1,7 +1,9 @@
 // 依存ライブラリなしの仮想スクロールテーブル。
 // 数万行規模のログでも、実際に画面に見えている行だけをDOMに生成することで
 // スクロールを軽快に保つ (行の高さは固定を前提とする)。
-import { el } from './common';
+import { el, measureMaxCellWidth } from './common';
+
+export { measureMaxCellWidth };
 
 export interface VirtualColumn {
   label: string;
@@ -27,6 +29,15 @@ export interface VirtualTableOptions {
   emptyMessage?: string;
   /** スクロール領域の高さ。省略時は親要素にflex:1で合わせる */
   height?: string;
+  /**
+   * ユーザーが列境界をドラッグで手動リサイズした幅(ラベルごと、px)。
+   * 指定があればcolumns[].widthより優先する。呼び出し側がモジュール変数等で
+   * 保持し、再描画のたびに同じMapを渡すことで、手動リサイズが再描画をまたいで
+   * 保持される(逆に呼び出し側でMapをクリアすれば「自動調整」に戻せる)。
+   */
+  columnWidthOverrides?: Map<string, number>;
+  /** 列境界のドラッグリサイズが終わった時に呼ばれる(ラベルと確定後のpx幅)。 */
+  onColumnResize?(label: string, widthPx: number): void;
 }
 
 export interface VirtualTableHandle {
@@ -37,42 +48,17 @@ export interface VirtualTableHandle {
 
 const DEFAULT_ROW_HEIGHT = 26;
 const OVERSCAN = 6;
-
-/** セル1つ分のpadding (左右合計)。measureMaxCellWidthの実測にも使う。 */
-const CELL_PADDING_PX = 16;
-const MIN_MEASURED_WIDTH = 80;
-const MAX_MEASURED_WIDTH = 2200;
-
-/**
- * 候補となるセル内容 (Node/文字列) の中で最も幅を取るものを実際にDOMへ
- * 一時挿入して計測し、そのpx幅を返す (列幅を実データに合わせて決めるための
- * ヘルパー。ヘッダーと全行が同じ固定px幅を使うことで、横スクロール時にも
- * ヘッダーと行がズレないようにする)。
- */
-export function measureMaxCellWidth(candidates: (Node | string)[], fallback = 120): number {
-  if (candidates.length === 0) return fallback;
-  const probe = el('div', {
-    style: 'position:absolute;visibility:hidden;left:-9999px;top:-9999px;white-space:nowrap;',
-  });
-  document.body.appendChild(probe);
-  let max = 0;
-  for (const c of candidates) {
-    const span = el('span', {
-      style: `display:inline-block;padding:0 ${CELL_PADDING_PX / 2}px;font-size:12.5px;white-space:nowrap;`,
-    });
-    span.append(c);
-    probe.appendChild(span);
-    max = Math.max(max, span.getBoundingClientRect().width);
-    probe.removeChild(span);
-  }
-  document.body.removeChild(probe);
-  return Math.min(MAX_MEASURED_WIDTH, Math.max(MIN_MEASURED_WIDTH, Math.ceil(max) + 4));
-}
+const MIN_COL_WIDTH = 32;
 
 export function renderVirtualTable(host: HTMLElement, options: VirtualTableOptions): VirtualTableHandle {
   const rowHeight = options.rowHeight ?? DEFAULT_ROW_HEIGHT;
-  const gridColumns = options.columns.map((c) => c.width).join(' ');
-  const totalWidth = options.columns.reduce((sum, c) => sum + (parseInt(c.width, 10) || 0), 0);
+  // 手動リサイズされた幅(columnWidthOverrides、ラベル一致)があればそれを、
+  // なければcolumns[].widthを初期値として使う、可変の実幅配列。
+  const liveWidths: number[] = options.columns.map(
+    (c) => options.columnWidthOverrides?.get(c.label) ?? (parseInt(c.width, 10) || 0)
+  );
+  const gridColumnsStr = () => liveWidths.map((w) => `${w}px`).join(' ');
+  const totalWidthPx = () => liveWidths.reduce((sum, w) => sum + w, 0);
   let rowCount = options.rowCount;
 
   host.innerHTML = '';
@@ -101,28 +87,61 @@ export function renderVirtualTable(host: HTMLElement, options: VirtualTableOptio
   // 常に見える位置に留まりつつ、横スクロールには追従して一緒に動く。
   const header = el('div', {
     style:
-      `display:grid;grid-template-columns:${gridColumns};width:${totalWidth}px;min-width:${totalWidth}px;` +
+      `display:grid;grid-template-columns:${gridColumnsStr()};width:${totalWidthPx()}px;min-width:${totalWidthPx()}px;` +
       'position:sticky;top:0;z-index:1;' +
       'border-bottom:1px solid var(--vscode-panel-border);background:var(--vscode-editor-background);',
   });
-  for (const col of options.columns) {
-    header.appendChild(
-      el(
-        'div',
-        {
-          style:
-            'padding:6px 8px;font-size:10.5px;text-transform:uppercase;letter-spacing:0.02em;' +
-            'color:var(--vscode-descriptionForeground);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;',
-        },
-        [col.label]
-      )
-    );
-  }
+  options.columns.forEach((col, i) => {
+    const headerCell = el('div', {
+      style:
+        'position:relative;padding:6px 8px;font-size:10.5px;text-transform:uppercase;letter-spacing:0.02em;' +
+        'color:var(--vscode-descriptionForeground);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;',
+    });
+    headerCell.append(col.label);
+    // 列境界のドラッグリサイズハンドル(ヘッダーセル右端の細い帯)。
+    const handle = el('div', {
+      style: 'position:absolute;top:0;right:-4px;width:7px;height:100%;cursor:col-resize;z-index:2;',
+    });
+    handle.addEventListener('mousedown', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const startX = (ev as MouseEvent).clientX;
+      const startWidth = liveWidths[i];
+      const onMove = (mv: MouseEvent) => {
+        liveWidths[i] = Math.max(MIN_COL_WIDTH, startWidth + (mv.clientX - startX));
+        applyWidths();
+      };
+      const onUp = () => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        options.onColumnResize?.(col.label, liveWidths[i]);
+      };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    });
+    headerCell.appendChild(handle);
+    header.appendChild(headerCell);
+  });
 
-  const sizer = el('div', { style: `position:relative;width:${totalWidth}px;min-width:${totalWidth}px;` });
+  const sizer = el('div', { style: `position:relative;width:${totalWidthPx()}px;min-width:${totalWidthPx()}px;` });
   const viewport = el('div', { style: 'position:absolute;top:0;left:0;right:0;' });
   sizer.appendChild(viewport);
   host.append(header, sizer);
+
+  /** ドラッグ中、grid-template-columns/幅を再計算せず全体を再描画すると重いため、
+   *  該当スタイルだけを直接書き換えて軽量に追従させる。 */
+  function applyWidths(): void {
+    const cols = gridColumnsStr();
+    const total = totalWidthPx();
+    header.style.gridTemplateColumns = cols;
+    header.style.width = `${total}px`;
+    header.style.minWidth = `${total}px`;
+    sizer.style.width = `${total}px`;
+    sizer.style.minWidth = `${total}px`;
+    viewport.querySelectorAll<HTMLElement>('.vgrid-row').forEach((row) => {
+      row.style.gridTemplateColumns = cols;
+    });
+  }
 
   let rafId: number | null = null;
 
@@ -141,7 +160,7 @@ export function renderVirtualTable(host: HTMLElement, options: VirtualTableOptio
       const extraClass = options.rowClassName?.(i);
       const row = el('div', {
         class: `vgrid-row${extraClass ? ` ${extraClass}` : ''}`,
-        style: `display:grid;grid-template-columns:${gridColumns};height:${rowHeight}px;align-items:center;`,
+        style: `display:grid;grid-template-columns:${gridColumnsStr()};height:${rowHeight}px;align-items:center;`,
       });
       for (const cellContent of options.renderRow(i)) {
         const cell = el('div', {

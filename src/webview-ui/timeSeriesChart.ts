@@ -1,7 +1,7 @@
 // Webview UI: Loggerタブ - 時系列グラフ
 import { ClampState, DecodedValue } from '../models/types';
 import { clear, el } from './common';
-import { CLAMP_MAX_COLOR, CLAMP_MIN_COLOR, fmtNum, fmtTime, paletteColor, unitSuffix } from './chartUtils';
+import { fmtNum, fmtTime, paletteColor, unitSuffix } from './chartUtils';
 import { buildCsvImportSection, getImportedChartData, mergeChartRows } from './csvImport';
 import { ChartColumn, ChartRow } from './loggerRows';
 
@@ -229,7 +229,7 @@ function buildChartArea(
     el('span', {}, ['表示:']),
     el('div', { class: 'segmented' }, [rawBtn, normBtn]),
     el('span', { class: 'sub', style: 'margin:0 0 0 8px' }, [
-      '▲=MAXに到達/脱した瞬間　▼=MINに到達/脱した瞬間　/　ホイールで左右移動・＋－でズーム',
+      '▲=MAXに到達/MINから脱出　▼=MINに到達/MAXから脱出　◆=1点だけ張り付いてすぐ離れた　/　ホイールで左右移動・＋－でズーム',
     ]),
   ]);
 
@@ -458,25 +458,46 @@ function buildSvg(
       body += `<polyline points="${seg.join(' ')}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
     }
 
-    // MAX/MINマーカーは「到達した瞬間」と「脱した瞬間」の遷移点だけに表示する
-    // (張り付いたまま続く区間の全点に出すと▲▼だらけになり線が見えなくなるため)。
-    let prevClamp: ClampState | undefined;
+    // MAX/MINマーカーは「張り付いている区間の最初の点(到達)」と「最後の点
+    // (脱する直前、まだ値はMAX/MINのまま)」だけに表示する(区間の全点に出すと
+    // ▲▼だらけになり線が見えなくなるため)。以前は「脱した後の最初の点」に
+    // 付けていたが、それだと実際にMAX/MINだった最後の瞬間とズレて分かりにくい
+    // ため、区間の最後の点に付け直す。
+    // 形は「向き」を表す: ▲=これから上がる方向の折り返し(MAXに到達/MINから脱出)、
+    // ▼=これから下がる方向の折り返し(MINに到達/MAXから脱出)。1点だけ張り付いて
+    // 即座に離れた場合は▲▼が同じ点に重なってしまうため◆で表す。
+    // 色は固定色ではなく、その系列自身の線色を使う(複数系列を重ねた時にどの
+    // 線のマーカーか一目で分かるように)。
+    //
+    // 「区間の最初/最後」はMAX/MIN以外の行(通常値やN.C.)を除いた配列の隣接関係
+    // ではなく、元の行の並び上での隣接関係で判定する必要がある。前者だと、
+    // 間に通常値やN.C.を挟んで離れた2つのMAX/MIN区間が「同じ区間」とみなされ、
+    // 前半区間の脱出マーカー・後半区間の到達マーカーが両方消えてしまう
+    // (実際に報告されたバグ: ログ先頭がMINで始まり、一度上昇してからさらに
+    // 後でまたMINに触れるようなデータで、最初の上昇時のマーカーが出ない)。
+    const points: { x: number; y: number; clamp: ClampState }[] = [];
     for (const row of rows) {
       const d = row.values.get(col.id);
-      if (!d || d.clamp === 'nc') continue;
-      const cur = d.clamp;
-      const enteredOrLeftMax = (cur === 'max') !== (prevClamp === 'max');
-      const enteredOrLeftMin = (cur === 'min') !== (prevClamp === 'min');
-      if (enteredOrLeftMax || enteredOrLeftMin) {
-        const x = xOf(row.t);
-        const y = yOf(d.value, i);
-        // 遷移が「MAXに関するもの」か「MINに関するもの」かを優先判定する
-        // (通常MAX/MIN間を直接またぐことはないため、片方だけ真になる想定)。
-        body += enteredOrLeftMax
-          ? `<polygon points="${x - 4},${y + 6} ${x + 4},${y + 6} ${x},${y - 2}" fill="${CLAMP_MAX_COLOR}"/>`
-          : `<polygon points="${x - 4},${y - 6} ${x + 4},${y - 6} ${x},${y + 2}" fill="${CLAMP_MIN_COLOR}"/>`;
+      if (!d) continue; // このrenderRows内でまだ一度もこの項目が現れていない行はスキップ
+      points.push({ x: xOf(row.t), y: yOf(d.value, i), clamp: d.clamp });
+    }
+    for (let j = 0; j < points.length; j++) {
+      const p = points[j];
+      if (p.clamp !== 'max' && p.clamp !== 'min') continue;
+      const prev = points[j - 1];
+      const next = points[j + 1];
+      const isFirst = !prev || prev.clamp !== p.clamp;
+      const isLast = !next || next.clamp !== p.clamp;
+      if (!isFirst && !isLast) continue; // 区間途中の点にはマーカーを出さない
+      if (isFirst && isLast) {
+        // 1点だけ張り付いてすぐ離れた(到達と脱出が同じ点で重なるケース)
+        body += `<polygon points="${p.x},${p.y - 6} ${p.x + 6},${p.y} ${p.x},${p.y + 6} ${p.x - 6},${p.y}" fill="${color}"/>`;
+        continue;
       }
-      prevClamp = cur;
+      const pointsUp = (p.clamp === 'max' && isFirst) || (p.clamp === 'min' && isLast);
+      body += pointsUp
+        ? `<polygon points="${p.x - 4},${p.y + 6} ${p.x + 4},${p.y + 6} ${p.x},${p.y - 2}" fill="${color}"/>`
+        : `<polygon points="${p.x - 4},${p.y - 6} ${p.x + 4},${p.y - 6} ${p.x},${p.y + 2}" fill="${color}"/>`;
     }
   });
 

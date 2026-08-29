@@ -38,6 +38,8 @@ export interface LoggerItemSpec {
   offset: number;
   /** Lsb (Resolution) */
   lsb: number;
+  /** LSBを分数表記("1/128"等)で入力した場合の元テキスト (表示専用、計算は常にlsbを使う) */
+  lsbText?: string;
   max: number;
   min: number;
   endian: Endian;
@@ -167,6 +169,8 @@ export interface FixedFormatSignal {
   /** データ長 (ビット単位) */
   lengthBits: number;
   lsb: number;
+  /** LSBを分数表記("1/128"等)で入力した場合の元テキスト (表示専用、計算は常にlsbを使う) */
+  lsbText?: string;
   offset: number;
   byteOrder: Endian;
 }

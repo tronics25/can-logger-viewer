@@ -3,7 +3,7 @@ import { formatCanId, parseCanId } from '../decode/canId';
 import { motorolaBitPosition } from '../decode/bits';
 import { FixedFormatCanIdEntry, FixedFormatSignal } from '../models/types';
 import { paletteColor } from './chartUtils';
-import { clear, el, icon, injectBaseStyles, lsbInput, vscodeApi } from './common';
+import { clear, el, icon, injectBaseStyles, lsbInput, makeTableColumnsResizable, measureMaxCellWidth, vscodeApi } from './common';
 
 const api = vscodeApi();
 let entry: FixedFormatCanIdEntry | undefined;
@@ -12,17 +12,6 @@ const FRAME_LENGTHS = [8, 12, 16, 20, 24, 32, 48, 64];
 
 function uid(): string {
   return `sig-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-}
-
-/**
- * バイト境界に沿っている(bitOffset=0かつlengthBitsが8の倍数=バイト単位で
- * ぴったり収まる)フィールドはLittle(Intel、通常のセンサー値等)、
- * バイト境界をまたぐ・ビット単位で詰め込む変則的なフィールドはBig
- * (Motorola、対象システムの信号定義書の書き方に合わせる)をデフォルトとする。
- */
-function defaultByteOrderFor(bitOffset: number, lengthBits: number): 'little' | 'big' {
-  const byteAligned = bitOffset === 0 && lengthBits % 8 === 0;
-  return byteAligned ? 'little' : 'big';
 }
 
 function save(): void {
@@ -52,7 +41,8 @@ function render(): void {
 
   const nameInput = el('input', { type: 'text', value: entry.name, style: 'max-width:260px;font-weight:600' }) as HTMLInputElement;
   nameInput.addEventListener('change', () => {
-    if (entry) entry.name = nameInput.value;
+    // 前後の空白が付いたままだと生ログのNAME列幅等に気づきにくい形で影響するため確定時に除く
+    if (entry) entry.name = nameInput.value.trim();
     save();
     render();
   });
@@ -84,7 +74,15 @@ function render(): void {
       button('JSONエクスポート', () => api.postMessage({ type: 'export' })),
     ]),
     buildBitGrid(entry),
-    el('div', { class: 'toolbar' }, [button('+ 信号を追加', addSignal, true)]),
+    el('div', { class: 'toolbar' }, [
+      button('+ 信号を追加', addSignal, true),
+      el('div', { class: 'spacer' }),
+      button('Auto Fit', () => {
+        // 手動リサイズをすべて解除し、実データに合わせた自動計測幅に戻す。
+        signalColWidths = null;
+        render();
+      }),
+    ]),
     buildSignalTable(),
     el('div', { class: 'sub' }, [
       'バイト位置＋ビット位置＋データ長（ビット単位）で定義します。バイト位置＋ビット位置がフレーム長を超える設定は保存時に警告します。',
@@ -247,30 +245,48 @@ function setByteHighlight(signalId: string, on: boolean): void {
   }
 }
 
-// 列ごとの幅の割合。無指定だとブラウザの表自動レイアウトが各セルの実際の
-// 入力値の長さから幅を決めてしまい、「信号名は説明的で長め・単位は短め」
-// という実データの傾向のせいで単位欄が不当に広く・信号名欄が不当に狭く
-// なってしまっていた。table-layout:fixedと合わせて明示指定することで
-// 実データの値に左右されない一定の見た目にする。
-const SIGNAL_COL_WIDTHS = ['24%', '8%', '10%', '10%', '12%', '10%', '10%', '12%', '4%'];
+const SIGNAL_COL_LABELS = ['信号名', '単位', 'バイト位置', 'ビット位置', 'データ長(bit)', 'Lsb', 'オフセット', 'バイトオーダー', ''];
+
+/**
+ * 各列の実幅(px)。列境界のドラッグでこの配列を直接書き換えることで、
+ * 再描画をまたいで手動リサイズを保持する。nullのままなら次のbuildSignalTable()
+ * で実データに合わせた自動計測幅を算出する(Auto Fitボタンでもnullに戻す)。
+ */
+let signalColWidths: number[] | null = null;
+
+/** 信号テーブルの列幅を、ヘッダーラベルと実際の信号値の表示幅から自動計測する。 */
+function measureSignalColWidths(signals: FixedFormatSignal[]): number[] {
+  const col = (i: number, extra: (Node | string)[], fallback: number) =>
+    measureMaxCellWidth([SIGNAL_COL_LABELS[i], ...extra], fallback);
+  return [
+    col(0, signals.map((s) => s.name), 140),
+    col(1, signals.map((s) => s.unit), 70),
+    col(2, signals.map((s) => String(s.byteOffset)), 90),
+    col(3, signals.map((s) => String(s.bitOffset)), 90),
+    col(4, signals.map((s) => String(s.lengthBits)), 110),
+    col(5, signals.map((s) => s.lsbText ?? formatLsbForMeasure(s.lsb)), 100),
+    col(6, signals.map((s) => String(s.offset)), 100),
+    col(7, ['Little', 'Big'], 110),
+    36,
+  ];
+}
+
+function formatLsbForMeasure(v: number): string {
+  return Number.isFinite(v) ? v.toString() : '';
+}
 
 function buildSignalTable(): HTMLElement {
+  const signals = entry?.signals ?? [];
+  if (!signalColWidths) signalColWidths = measureSignalColWidths(signals);
+  const widths = signalColWidths;
   const colgroup = el(
     'colgroup',
     {},
-    SIGNAL_COL_WIDTHS.map((w) => el('col', { style: `width:${w}` }))
+    widths.map((w) => el('col', { style: `width:${w}px` }))
   );
   const table = el('table', { style: 'table-layout:fixed' }, [
     colgroup,
-    el('thead', {}, [
-      el(
-        'tr',
-        {},
-        ['信号名', '単位', 'バイト位置', 'ビット位置', 'データ長(bit)', 'Lsb', 'オフセット', 'バイトオーダー', ''].map((t) =>
-          el('th', {}, [t])
-        )
-      ),
-    ]),
+    el('thead', {}, [el('tr', {}, SIGNAL_COL_LABELS.map((t) => el('th', {}, [t])))]),
   ]);
   const tbody = el('tbody');
 
@@ -285,31 +301,21 @@ function buildSignalTable(): HTMLElement {
           max: entry ? entry.frameLength - 1 : undefined,
         }),
       ]),
+      el('td', {}, [numberInput(signal.bitOffset, (v) => (signal.bitOffset = v), { min: 0, max: 7 })]),
+      el('td', {}, [numberInput(signal.lengthBits, (v) => (signal.lengthBits = v), { min: 1, max: 32 })]),
       el('td', {}, [
-        numberInput(
-          signal.bitOffset,
-          (v) => {
-            signal.bitOffset = v;
-            signal.byteOrder = defaultByteOrderFor(signal.bitOffset, signal.lengthBits);
+        lsbInput(
+          signal.lsb,
+          signal.lsbText,
+          (v, t) => {
+            signal.lsb = v;
+            signal.lsbText = t;
           },
-          { min: 0, max: 7 }
+          () => {
+            save();
+            render();
+          }
         ),
-      ]),
-      el('td', {}, [
-        numberInput(
-          signal.lengthBits,
-          (v) => {
-            signal.lengthBits = v;
-            signal.byteOrder = defaultByteOrderFor(signal.bitOffset, signal.lengthBits);
-          },
-          { min: 1, max: 32 }
-        ),
-      ]),
-      el('td', {}, [
-        lsbInput(signal.lsb, (v) => (signal.lsb = v), () => {
-          save();
-          render();
-        }),
       ]),
       el('td', {}, [numberInput(signal.offset, (v) => (signal.offset = v))]),
       el('td', {}, [byteOrderSelect(signal)]),
@@ -330,13 +336,16 @@ function buildSignalTable(): HTMLElement {
   }
 
   table.appendChild(tbody);
+  makeTableColumnsResizable(table, widths);
   return table;
 }
 
 function textInput(value: string, onChange: (v: string) => void): HTMLInputElement {
   const input = el('input', { type: 'text', value }) as HTMLInputElement;
   input.addEventListener('change', () => {
-    onChange(input.value);
+    // 前後の空白(半角・全角とも)が付いたままだと見た目には気づきにくいまま
+    // Auto Fitの列幅計算に影響してしまうため、確定時に取り除く。
+    onChange(input.value.trim());
     save();
     render(); // 信号名はバイトグリッドの凡例・ホバー時のツールチップにも使われるため再描画する
   });
@@ -421,9 +430,11 @@ function addSignal(): void {
     lengthBits,
     lsb: 1,
     offset: 0,
-    // バイト境界に沿っていれば(通常のセンサー値等)Little、沿っていなければ
-    // (ビット詰め込み型の変則的なフィールド)Bigを自動選択する。
-    byteOrder: defaultByteOrderFor(bitOffset, lengthBits),
+    // バイト位置/データ長の編集のたびに自動切替するとLittle運用時に毎回
+    // 手動で直す手間が生じるため、追加時のみ「直前の信号と同じバイトオーダー」
+    // を初期値にする(何も無ければLittle)。以降はユーザーが明示的に変えない
+    // 限り自動では変わらない。
+    byteOrder: last ? last.byteOrder : 'little',
   };
   entry.signals.push(signal);
   save();
